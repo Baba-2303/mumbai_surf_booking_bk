@@ -43,9 +43,23 @@ try {
     }
     
     $endpoint = $pathParts[0] ?? '';
-    $resource = $pathParts[1] ?? '';
-    $id = $pathParts[2] ?? '';
-    $action = $pathParts[3] ?? '';
+    $resource =  '';
+    $id =  '';
+    $action =  '';
+
+    // Check if the second part is numeric (an ID) or a string (a resource)
+    if (isset($pathParts[1])) {
+        if (is_numeric($pathParts[1])) {
+            $id = $pathParts[1];
+            // Potentially handle actions like /bookings/5/cancel
+            $action = $pathParts[2] ?? ''; 
+        } else {
+            $resource = $pathParts[1];
+            // Potentially handle IDs after a resource, e.g., /admin/users/5
+            $id = $pathParts[2] ?? '';
+            $action = $pathParts[3] ?? '';
+        }
+    }
     
     switch ($endpoint) {
         case 'health':
@@ -64,12 +78,12 @@ try {
             
         case 'pricing':
             require_once 'endpoints/pricing.php';
-            handlePricingEndpoint($method, $resource);
+            handlePricingEndpoint($method, $resource, $id ?? '');
             break;
             
         case 'utils':
             require_once 'endpoints/utils.php';
-            handleUtilsEndpoint($method, $resource);
+            handleUtilsEndpoint($method, $resource, $id ?? '');
             break;
             
         case 'admin':
@@ -77,7 +91,7 @@ try {
             if ($resource !== 'login') {
                 requireAuth();
             }
-            require_once __DIR__ . '/endpoints/admin.php';
+            require_once 'endpoints/admin.php';
             handleAdminEndpoint($method, $resource, $id, $action);
             break;
             

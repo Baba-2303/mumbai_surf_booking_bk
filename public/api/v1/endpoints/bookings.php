@@ -1,6 +1,7 @@
 <?php
 /**
- * Bookings Endpoint Handler
+ * Updated Bookings Endpoint Handler
+ * Now supports activity-based booking system
  */
 
 function handleBookingsEndpoint($method, $resource, $id) {
@@ -16,7 +17,10 @@ function handleBookingsEndpoint($method, $resource, $id) {
             break;
             
         case 'POST':
-            if ($resource === 'surf-sup') {
+            if ($resource === 'activity') {
+                handleCreateActivityBooking($booking);
+            } elseif ($resource === 'surf-sup') {
+                // Legacy endpoint - redirect to activity booking
                 handleCreateSurfSupBooking($booking);
             } elseif ($resource === 'package') {
                 handleCreatePackageBooking($booking);
@@ -55,18 +59,106 @@ function handleGetBooking($booking, $id) {
 }
 
 /**
- * POST /bookings/surf-sup
+ * NEW: POST /bookings/activity
+ * Create activity booking (surf/sup/kayak)
  */
-function handleCreateSurfSupBooking($booking) {
+function handleCreateActivityBooking($booking) {
     $data = getRequestBody();
     
     // Validate required fields
     validateRequired($data, [
         'customer_name', 'customer_email', 'customer_phone',
+        'activity_type', 'session_date', 'slot_id', 'people'
+    ]);
+    
+    // Validate activity type
+    $validActivities = array_keys(getActivityTypes());
+    if (!in_array($data['activity_type'], $validActivities)) {
+        sendError('Invalid activity type. Valid options: ' . implode(', ', $validActivities), 'VALIDATION_ERROR', 422);
+    }
+    
+    // Validate date format
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $data['session_date']) || !strtotime($data['session_date'])) {
+        sendError('Invalid session date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Validate people array
+    if (!is_array($data['people']) || empty($data['people'])) {
+        sendError('At least one person is required', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Get activity capacity limit
+    $activityInfo = getActivityInfo($data['activity_type']);
+    $maxCapacity = $activityInfo['default_capacity'];
+    
+    if (count($data['people']) > $maxCapacity) {
+        sendError("Maximum $maxCapacity people allowed for {$activityInfo['name']}", 'VALIDATION_ERROR', 422);
+    }
+    
+    // Validate each person
+    foreach ($data['people'] as $index => $person) {
+        if (empty($person['name']) || empty($person['age'])) {
+            sendError("Name and age required for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+        
+        if (!is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
+            sendError("Age must be between 5 and 100 for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+    }
+    
+    // Check if date is within booking window
+    $slot = new Slot();
+    $bookableDates = $slot->getBookableDates();
+    $validDates = array_column($bookableDates, 'date');
+    
+    if (!in_array($data['session_date'], $validDates)) {
+        sendError('Session date is outside booking window', 'VALIDATION_ERROR', 422);
+    }
+    
+    try {
+        // Check activity slot availability before creating booking
+        if (!$slot->hasActivityAvailability($data['slot_id'], $data['session_date'], $data['activity_type'], count($data['people']))) {
+            sendError('Selected activity slot is no longer available', 'SLOT_UNAVAILABLE', 409);
+        }
+        
+        $bookingId = $booking->createActivityBooking($data);
+        
+        // Get the created booking with all details
+        $bookingData = $booking->getById($bookingId);
+        
+        // Add booking reference
+        $bookingData['booking_reference'] = $booking->generateBookingReference(
+            $bookingId, 
+            $data['session_date'], 
+            $data['activity_type']
+        );
+        
+        sendResponse(true, $bookingData, 'Activity booking created successfully', 201);
+        
+    } catch (Exception $e) {
+        sendError('Failed to create booking: ' . $e->getMessage(), 'INTERNAL_ERROR', 500);
+    }
+}
+
+/**
+ * LEGACY: POST /bookings/surf-sup
+ * Maintains backward compatibility - converts to activity booking
+ */
+function handleCreateSurfSupBooking($booking) {
+    $data = getRequestBody();
+    
+    // Validate required fields (legacy format)
+    validateRequired($data, [
+        'customer_name', 'customer_email', 'customer_phone',
         'service_type', 'session_date', 'slot_id', 'people'
     ]);
     
-    // Validate service type
+    // Convert service_type to activity_type for backward compatibility
+    if (!isset($data['activity_type']) && isset($data['service_type'])) {
+        $data['activity_type'] = $data['service_type'];
+    }
+    
+    // Validate service/activity type
     if (!in_array($data['service_type'], ['surf', 'sup'])) {
         sendError('Service type must be either "surf" or "sup"', 'VALIDATION_ERROR', 422);
     }
@@ -106,11 +198,12 @@ function handleCreateSurfSupBooking($booking) {
     }
     
     try {
-        // Check slot availability before creating booking
+        // Use legacy availability check for backward compatibility
         if (!$slot->hasAvailability($data['slot_id'], $data['session_date'], count($data['people']))) {
             sendError('Selected slot is no longer available', 'SLOT_UNAVAILABLE', 409);
         }
         
+        // Call legacy method that redirects to activity booking
         $bookingId = $booking->createSurfSupBooking($data);
         
         // Get the created booking with all details
@@ -146,7 +239,7 @@ function handleCreatePackageBooking($booking) {
         sendError('Invalid accommodation type', 'VALIDATION_ERROR', 422);
     }
     
-    // Validate service type
+    // Validate service type (packages still use surf/sup only)
     if (!in_array($data['service_type'], ['surf', 'sup'])) {
         sendError('Service type must be either "surf" or "sup"', 'VALIDATION_ERROR', 422);
     }
@@ -170,13 +263,33 @@ function handleCreatePackageBooking($booking) {
         sendError('Maximum 40 people allowed per booking', 'VALIDATION_ERROR', 422);
     }
     
+    // Validate each person
+    foreach ($data['people'] as $index => $person) {
+        if (empty($person['name']) || empty($person['age'])) {
+            sendError("Name and age required for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+        
+        if (!is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
+            sendError("Age must be between 5 and 100 for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+    }
+    
     // Validate sessions
     if (!is_array($data['sessions']) || empty($data['sessions'])) {
         sendError('Session information is required', 'VALIDATION_ERROR', 422);
     }
     
+    foreach ($data['sessions'] as $index => $session) {
+        if (empty($session['session_date']) || !strtotime($session['session_date'])) {
+            sendError("Valid session date is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+        if (empty($session['slot_id']) || !is_numeric($session['slot_id'])) {
+            sendError("Valid slot selection is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+    }
+    
     try {
-        // Check all session slots availability
+        // Check all session slots availability (using legacy method for packages)
         $slot = new Slot();
         foreach ($data['sessions'] as $session) {
             if (!$slot->hasAvailability($session['slot_id'], $session['session_date'], count($data['people']))) {
@@ -188,6 +301,13 @@ function handleCreatePackageBooking($booking) {
         
         // Get the created booking with all details
         $bookingData = $booking->getById($bookingId);
+        
+        // Add booking reference
+        $bookingData['booking_reference'] = $booking->generateBookingReference(
+            $bookingId, 
+            $data['check_in_date'], 
+            'package'
+        );
         
         sendResponse(true, $bookingData, 'Package booking created successfully', 201);
         
@@ -245,11 +365,29 @@ function handleCreateStayBooking($booking) {
         sendError('Maximum 40 people allowed per booking', 'VALIDATION_ERROR', 422);
     }
     
+    // Validate each person
+    foreach ($data['people'] as $index => $person) {
+        if (empty($person['name']) || empty($person['age'])) {
+            sendError("Name and age required for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+        
+        if (!is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
+            sendError("Age must be between 5 and 100 for person " . ($index + 1), 'VALIDATION_ERROR', 422);
+        }
+    }
+    
     try {
         $bookingId = $booking->createStayBooking($data);
         
         // Get the created booking with all details
         $bookingData = $booking->getById($bookingId);
+        
+        // Add booking reference
+        $bookingData['booking_reference'] = $booking->generateBookingReference(
+            $bookingId, 
+            $data['check_in_date'], 
+            'stay'
+        );
         
         sendResponse(true, $bookingData, 'Stay booking created successfully', 201);
         

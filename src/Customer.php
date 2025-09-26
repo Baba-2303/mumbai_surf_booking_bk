@@ -1,6 +1,7 @@
 <?php
 /**
- * Customer Management Class
+ * Updated Customer Management Class
+ * Now supports activity-based booking system
  */
 
 class Customer {
@@ -11,7 +12,8 @@ class Customer {
     }
     
     /**
-     * Create or get existing customer
+     * Create or get existing customer - FIXED VERSION
+     * No transaction management - let the caller handle it
      */
     public function createOrGet($name, $email, $phone) {
         // Check if customer already exists
@@ -36,6 +38,22 @@ class Customer {
             "INSERT INTO customers (name, email, phone) VALUES (?, ?, ?)",
             [$name, $email, $phone]
         );
+    }
+    
+    /**
+     * Create or get existing customer with transaction - NEW METHOD
+     * Use this when you need transaction management
+     */
+    public function createOrGetWithTransaction($name, $email, $phone) {
+        $this->db->beginTransaction();
+        try {
+            $customerId = $this->createOrGet($name, $email, $phone);
+            $this->db->commit();
+            return $customerId;
+        } catch (Exception $e) {
+            $this->db->rollback();
+            throw $e;
+        }
     }
     
     /**
@@ -80,23 +98,24 @@ class Customer {
     }
     
     /**
-     * Get customer booking history
+     * Get customer booking history - UPDATED for activity system
      */
     public function getBookingHistory($customerId) {
         return $this->db->fetchAll(
             "SELECT b.*, 
                     CASE 
-                        WHEN b.booking_type = 'surf_sup' THEN ssb.service_type
+                        WHEN b.booking_type = 'activity' THEN ab.activity_type
+                        WHEN b.booking_type = 'surf_sup' THEN ab.service_type
                         WHEN b.booking_type = 'package' THEN pb.service_type
                         ELSE 'N/A'
                     END as service_type,
                     CASE 
-                        WHEN b.booking_type = 'surf_sup' THEN ssb.session_date
+                        WHEN b.booking_type IN ('activity', 'surf_sup') THEN ab.session_date
                         WHEN b.booking_type = 'package' THEN pb.check_in_date
                         WHEN b.booking_type = 'stay_only' THEN sb.check_in_date
                     END as booking_date
              FROM bookings b
-             LEFT JOIN surf_sup_bookings ssb ON b.id = ssb.booking_id
+             LEFT JOIN activity_bookings ab ON b.id = ab.booking_id
              LEFT JOIN package_bookings pb ON b.id = pb.booking_id
              LEFT JOIN stay_bookings sb ON b.id = sb.booking_id
              WHERE b.customer_id = ?
@@ -126,6 +145,40 @@ class Customer {
             'last_booking_date' => null,
             'first_booking_date' => null
         ];
+    }
+    
+    /**
+     * Get customer activity preferences - NEW METHOD
+     */
+    public function getActivityPreferences($customerId) {
+        return $this->db->fetchAll(
+            "SELECT ab.activity_type, COUNT(*) as booking_count, 
+                    MAX(ab.session_date) as last_session_date
+             FROM activity_bookings ab
+             JOIN bookings b ON ab.booking_id = b.id
+             WHERE b.customer_id = ? AND b.booking_status != 'cancelled'
+             GROUP BY ab.activity_type
+             ORDER BY booking_count DESC",
+            [$customerId]
+        );
+    }
+    
+    /**
+     * Get customer's upcoming sessions - NEW METHOD
+     */
+    public function getUpcomingSessions($customerId) {
+        return $this->db->fetchAll(
+            "SELECT b.id as booking_id, ab.activity_type, ab.session_date, 
+                    s.start_time, s.end_time, b.total_people, b.payment_status
+             FROM bookings b
+             JOIN activity_bookings ab ON b.id = ab.booking_id
+             JOIN slots s ON ab.slot_id = s.id
+             WHERE b.customer_id = ? 
+               AND ab.session_date >= CURDATE() 
+               AND b.booking_status = 'confirmed'
+             ORDER BY ab.session_date, s.start_time",
+            [$customerId]
+        );
     }
     
     /**
@@ -166,7 +219,7 @@ class Customer {
     }
     
     /**
-     * Update customer information
+     * Update customer information - NO TRANSACTION
      */
     public function update($id, $name, $phone) {
         return $this->db->execute(
@@ -176,18 +229,41 @@ class Customer {
     }
     
     /**
+     * Update customer with transaction
+     */
+    public function updateWithTransaction($id, $name, $phone) {
+        $this->db->beginTransaction();
+        try {
+            $affectedRows = $this->update($id, $name, $phone);
+            $this->db->commit();
+            return $affectedRows;
+        } catch (Exception $e) {
+            $this->db->rollback();
+            throw $e;
+        }
+    }
+    
+    /**
      * Soft delete customer (for GDPR compliance)
      */
     public function anonymize($id) {
-        return $this->db->execute(
-            "UPDATE customers 
-             SET name = 'Deleted User', 
-                 email = CONCAT('deleted_', id, '@mumbaisurfclub.com'),
-                 phone = 'DELETED',
-                 updated_at = NOW() 
-             WHERE id = ?",
-            [$id]
-        );
+        $this->db->beginTransaction();
+        try {
+            $affectedRows = $this->db->execute(
+                "UPDATE customers 
+                 SET name = 'Deleted User', 
+                     email = CONCAT('deleted_', id, '@mumbaisurfclub.com'),
+                     phone = 'DELETED',
+                     updated_at = NOW() 
+                 WHERE id = ?",
+                [$id]
+            );
+            $this->db->commit();
+            return $affectedRows;
+        } catch (Exception $e) {
+            $this->db->rollback();
+            throw $e;
+        }
     }
 }
 ?>

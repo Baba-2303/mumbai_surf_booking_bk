@@ -173,6 +173,22 @@ class Database {
     public function __wakeup() {
         throw new Exception("Cannot unserialize singleton");
     }
+
+    /**
+     * Check if there's an active transaction
+     */
+    public function hasActiveTransaction() {
+        return $this->pdo->inTransaction();
+    }
+
+    /**
+     * Force rollback if transaction exists
+     */
+    public function forceRollback() {
+        if ($this->pdo->inTransaction()) {
+            $this->pdo->rollback();
+        }
+    }
 }
 
 /**

@@ -1,6 +1,7 @@
 <?php
 /**
  * Mumbai Surf Club Booking System Configuration
+ * Updated for Activity-Based System
  */
 
 // Database Configuration
@@ -37,10 +38,54 @@ define('SESSION_TIMEOUT', 86400);
 // Booking Configuration
 define('BOOKING_ADVANCE_DAYS', 7); // How many days in advance can book
 define('SLOT_DURATION_MINUTES', 90); // 1.5 hours
-define('DEFAULT_SLOT_CAPACITY', 40);
+
+// Activity Configuration - NEW
+define('ACTIVITY_TYPES', [
+    'surf' => [
+        'name' => 'Surfing',
+        'description' => 'Learn to ride the waves on our surfboards',
+        'default_capacity' => 40,
+        'price_per_person' => 1700
+    ],
+    'sup' => [
+        'name' => 'Stand Up Paddling',
+        'description' => 'Balance and paddle on a stand-up paddleboard',
+        'default_capacity' => 12,
+        'price_per_person' => 1700
+    ],
+    'kayak' => [
+        'name' => 'Kayaking',
+        'description' => 'Paddle through calm waters in a kayak',
+        'default_capacity' => 2,
+        'price_per_person' => 1700
+    ]
+]);
+
+// Weekly Booking Window Configuration - NEW
+define('BOOKING_WINDOW_TYPE', 'weekly'); // 'weekly' = Monday to Monday, 'daily' = rolling 7 days
+define('WEEK_START_DAY', 'monday'); // When does the booking week start
+
+// Accommodation Capacity Limits
+define('ACCOMMODATION_CAPACITY', [
+    'tent' => [
+        'max_people_per_unit' => 1, // 1 people per tent
+        'total_units' => 100,       // 100 tents available
+        'max_total_capacity' => 100 // 100 tents × 1 people each
+    ],
+    'dorm' => [
+        'max_people_per_unit' => 1, // 1 people per dorm room
+        'total_units' => 100,       // 100 dorm rooms
+        'max_total_capacity' => 100 // 100 dorms × 1 people each
+    ],
+    'cottage' => [
+        'max_people_per_unit' => 4, // 4 people per cottage
+        'total_units' => 2,         // Only 2 cottages available
+        'max_total_capacity' => 8   // 2 cottages × 4 people each
+    ]
+]);
 
 // Pricing Configuration (in INR)
-define('SURF_SUP_BASE_PRICE', 1700);
+define('SURF_SUP_BASE_PRICE', 1700); // Base price for all activities
 define('GST_RATE', 0.18); // 18%
 
 // Package Base Prices (per person)
@@ -87,7 +132,6 @@ define('STAY_PRICES', [
     ]
 ]);
 
-
 // Extended Adventure (6N 7D)
 define('EXTENDED_ADVENTURE', [
     'dorm' => [
@@ -95,7 +139,6 @@ define('EXTENDED_ADVENTURE', [
         'with_meals' => 11000
     ]
 ]);
-
 
 // Payment Gateway (Razorpay)
 // NOTE: Get these from your Razorpay dashboard
@@ -148,24 +191,158 @@ function getCurrentWeekDates() {
     return $dates;
 }
 
-// Helper function to calculate cottage stay pricing
-function calculateCottageStayPrice($people_count, $with_meals = false, $nights = 1) {
-    $base_price = STAY_PRICES['cottage']['base_price'] * $nights;
-    
-    if ($with_meals) {
-        $meal_price = STAY_PRICES['cottage']['meal_price_per_person'] * $people_count * $nights;
-        return $base_price + $meal_price;
-    }
-    
-    return $base_price;
+// NEW: Get activity types
+function getActivityTypes() {
+    return ACTIVITY_TYPES;
 }
 
-// Helper function to get booking window dates
-function getBookingWindowDates() {
-    $dates = [];
-    for ($i = 0; $i < BOOKING_ADVANCE_DAYS; $i++) {
-        $dates[] = date('Y-m-d', strtotime('+' . $i . ' days'));
+// NEW: Get activity info by type
+function getActivityInfo($activityType) {
+    return ACTIVITY_TYPES[$activityType] ?? null;
+}
+
+// NEW: Weekly booking window helper
+function getWeeklyBookingWindow() {
+    $today = new DateTime();
+    $currentDayOfWeek = (int)$today->format('N'); // 1=Monday, 7=Sunday
+    
+    // Find next Monday
+    $daysUntilNextMonday = (8 - $currentDayOfWeek) % 7;
+    if ($daysUntilNextMonday === 0) {
+        // If today is Monday, next Monday is 7 days away
+        $daysUntilNextMonday = 7;
     }
-    return $dates;
+    
+    $nextMonday = clone $today;
+    $nextMonday->modify("+{$daysUntilNextMonday} days");
+    
+    // Get bookable dates (from today until next Monday)
+    $dates = [];
+    $current = clone $today;
+    
+    while ($current < $nextMonday) {
+        $dates[] = [
+            'date' => $current->format('Y-m-d'),
+            'day_name' => $current->format('l'),
+            'formatted_date' => $current->format('M d, Y'),
+            'is_today' => $current->format('Y-m-d') === $today->format('Y-m-d'),
+            'is_weekend' => in_array((int)$current->format('N'), [6, 7])
+        ];
+        $current->modify('+1 day');
+    }
+    
+    return [
+        'dates' => $dates,
+        'window_end' => $nextMonday->format('Y-m-d'),
+        'days_available' => count($dates)
+    ];
+}
+
+// Enhanced accommodation requirements calculation
+function calculateAccommodationRequirements($accommodationType, $peopleCount) {
+    $capacity = ACCOMMODATION_CAPACITY[$accommodationType];
+    
+    // Check if total capacity exceeded
+    if ($peopleCount > $capacity['max_total_capacity']) {
+        throw new Exception("Cannot accommodate $peopleCount people in $accommodationType. Maximum capacity is {$capacity['max_total_capacity']} people.");
+    }
+    
+    // Calculate units needed
+    $unitsNeeded = ceil($peopleCount / $capacity['max_people_per_unit']);
+    
+    // Check if we have enough units
+    if ($unitsNeeded > $capacity['total_units']) {
+        throw new Exception("Need $unitsNeeded {$accommodationType}s but only {$capacity['total_units']} available.");
+    }
+    
+    return [
+        'accommodation_type' => $accommodationType,
+        'people_count' => $peopleCount,
+        'units_needed' => $unitsNeeded,
+        'max_people_per_unit' => $capacity['max_people_per_unit'],
+        'total_units_available' => $capacity['total_units'],
+        'is_valid' => true
+    ];
+}
+
+// Enhanced package pricing with capacity validation
+function calculatePackagePriceWithCapacity($packageType, $accommodationType, $peopleCount) {
+    // First validate capacity
+    $requirements = calculateAccommodationRequirements($accommodationType, $peopleCount);
+    
+    $prices = PACKAGE_PRICES[$packageType];
+    $baseAmount = 0;
+    
+    if ($accommodationType === 'cottage') {
+        // For cottages: price based on number of cottages needed
+        $cottagesNeeded = $requirements['units_needed'];
+        
+        if ($cottagesNeeded == 1) {
+            // 1-4 people = 1 cottage, use people-based pricing
+            $cottageKey = 'cottage_' . min($peopleCount, 4);
+            $baseAmount = $prices[$cottageKey];
+        } else {
+            // 5-8 people = 2 cottages, use maximum price for cottages
+            $baseAmount = $prices['cottage_4'] * $cottagesNeeded;
+        }
+    } else {
+        // Tent/dorm: per person pricing
+        $baseAmount = $prices[$accommodationType] * $peopleCount;
+    }
+    
+    return [
+        'base_amount' => $baseAmount,
+        'accommodation_requirements' => $requirements,
+        'pricing_details' => [
+            'units_needed' => $requirements['units_needed'],
+            'price_per_unit' => $accommodationType === 'cottage' ? 
+                ($requirements['units_needed'] == 1 ? $baseAmount : $prices['cottage_4']) : 
+                $prices[$accommodationType],
+            'total_people' => $peopleCount
+        ]
+    ];
+}
+
+// Enhanced stay pricing with capacity validation
+function calculateStayPriceWithCapacity($accommodationType, $peopleCount, $nights, $includesMeals) {
+    // First validate capacity
+    $requirements = calculateAccommodationRequirements($accommodationType, $peopleCount);
+    
+    $baseAmount = 0;
+    
+    if ($accommodationType === 'cottage') {
+        $cottagesNeeded = $requirements['units_needed'];
+        $basePrice = STAY_PRICES['cottage']['base_price'] * $cottagesNeeded * $nights;
+        $baseAmount = $basePrice;
+        
+        if ($includesMeals) {
+            $mealPrice = STAY_PRICES['cottage']['meal_price_per_person'] * $peopleCount * $nights;
+            $baseAmount += $mealPrice;
+        }
+    } else {
+        // Tent/dorm pricing per person per night
+        $pricePerNight = $includesMeals ? 
+            STAY_PRICES[$accommodationType]['with_meals'] : 
+            STAY_PRICES[$accommodationType]['without_meals'];
+        
+        $baseAmount = $pricePerNight * $peopleCount * $nights;
+    }
+    
+    return [
+        'base_amount' => $baseAmount,
+        'accommodation_requirements' => $requirements,
+        'pricing_details' => [
+            'units_needed' => $requirements['units_needed'],
+            'nights' => $nights,
+            'includes_meals' => $includesMeals,
+            'total_people' => $peopleCount
+        ]
+    ];
+}
+
+// Legacy helper function - now uses weekly booking window
+function getBookingWindowDates() {
+    $window = getWeeklyBookingWindow();
+    return array_column($window['dates'], 'date');
 }
 ?>

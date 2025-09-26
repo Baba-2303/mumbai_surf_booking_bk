@@ -1,7 +1,8 @@
 <?php
 /**
- * Booking Management Class
- * Handles all booking operations: Surf/SUP, Packages, and Stay-only
+ * Updated Booking Management Class
+ * Handles all booking operations: Activity, Packages, and Stay-only
+ * Now supports activity-based capacity system
  */
 
 class Booking {
@@ -16,14 +17,17 @@ class Booking {
     }
     
     /**
-     * Create Surf/SUP Booking
+     * Create Activity Booking (Surf/SUP/Kayak) - NEW METHOD
      */
-    public function createSurfSupBooking($bookingData) {
+    public function createActivityBooking($bookingData) {
+        if ($this->db->hasActiveTransaction()) {
+            $this->db->forceRollback();
+        }
         $this->db->beginTransaction();
         
         try {
             // Validate booking data
-            $errors = $this->validateSurfSupBooking($bookingData);
+            $errors = $this->validateActivityBooking($bookingData);
             if (!empty($errors)) {
                 throw new Exception('Validation failed: ' . implode(', ', $errors));
             }
@@ -39,19 +43,20 @@ class Booking {
             $peopleCount = count($bookingData['people']);
             $pricing = calculateTotalAmount(SURF_SUP_BASE_PRICE * $peopleCount);
             
-            // Check slot availability
-            if (!$this->slot->hasAvailability(
+            // Check activity slot availability
+            if (!$this->slot->hasActivityAvailability(
                 $bookingData['slot_id'],
                 $bookingData['session_date'],
+                $bookingData['activity_type'],
                 $peopleCount
             )) {
-                throw new Exception('Selected slot is no longer available');
+                throw new Exception('Selected activity slot is no longer available');
             }
             
             // Create main booking record
             $bookingId = $this->db->insert(
                 "INSERT INTO bookings (customer_id, booking_type, total_people, base_amount, gst_amount, total_amount)
-                 VALUES (?, 'surf_sup', ?, ?, ?, ?)",
+                 VALUES (?, 'activity', ?, ?, ?, ?)",
                 [
                     $customerId,
                     $peopleCount,
@@ -61,13 +66,14 @@ class Booking {
                 ]
             );
             
-            // Create surf/sup specific record
+            // Create activity specific record
             $this->db->insert(
-                "INSERT INTO surf_sup_bookings (booking_id, service_type, session_date, slot_id)
-                 VALUES (?, ?, ?, ?)",
+                "INSERT INTO activity_bookings (booking_id, service_type, activity_type, session_date, slot_id)
+                 VALUES (?, ?, ?, ?, ?)",
                 [
                     $bookingId,
-                    $bookingData['service_type'],
+                    $bookingData['activity_type'], // service_type for backward compatibility
+                    $bookingData['activity_type'],
                     $bookingData['session_date'],
                     $bookingData['slot_id']
                 ]
@@ -81,10 +87,13 @@ class Booking {
                 );
             }
             
-            // Reserve the slot
-            $this->slot->reserveSlots([
-                ['slot_id' => $bookingData['slot_id'], 'date' => $bookingData['session_date']]
-            ], $peopleCount);
+            // Reserve the activity slot
+            $this->slot->reserveActivitySlot(
+                $bookingData['slot_id'],
+                $bookingData['session_date'],
+                $bookingData['activity_type'],
+                $peopleCount
+            );
             
             $this->db->commit();
             return $bookingId;
@@ -96,9 +105,21 @@ class Booking {
     }
     
     /**
-     * Create Package Booking
+     * LEGACY METHOD: Create Surf/SUP Booking (kept for backward compatibility)
+     */
+    public function createSurfSupBooking($bookingData) {
+        // Convert to new activity booking format
+        $bookingData['activity_type'] = $bookingData['service_type'] ?? 'surf';
+        return $this->createActivityBooking($bookingData);
+    }
+    
+    /**
+     * Create Package Booking - UPDATED to work with new slot system
      */
     public function createPackageBooking($bookingData) {
+        if ($this->db->hasActiveTransaction()) {
+            $this->db->forceRollback();
+        }
         $this->db->beginTransaction();
         
         try {
@@ -107,6 +128,10 @@ class Booking {
             if (!empty($errors)) {
                 throw new Exception('Validation failed: ' . implode(', ', $errors));
             }
+            
+            // Calculate check-out date based on package type
+            $nights = (strpos($bookingData['package_type'], '2_nights') !== false) ? 2 : 1;
+            $bookingData['check_out_date'] = date('Y-m-d', strtotime($bookingData['check_in_date'] . ' +' . $nights . ' days'));
             
             // Create or get customer
             $customerId = $this->customer->createOrGet(
@@ -124,7 +149,7 @@ class Booking {
             );
             $pricing = calculateTotalAmount($packagePrice);
             
-            // Check all session slots availability
+            // Check all session slots availability (using legacy method for packages)
             foreach ($bookingData['sessions'] as $session) {
                 if (!$this->slot->hasAvailability(
                     $session['slot_id'],
@@ -179,12 +204,8 @@ class Booking {
                 );
             }
             
-            // Reserve all session slots
-            $slots = [];
-            foreach ($bookingData['sessions'] as $session) {
-                $slots[] = ['slot_id' => $session['slot_id'], 'date' => $session['session_date']];
-            }
-            $this->slot->reserveSlots($slots, $peopleCount);
+            // Reserve all session slots using legacy method
+            $this->reservePackageSlotsWithinTransaction($bookingData['sessions'], $peopleCount);
             
             $this->db->commit();
             return $bookingId;
@@ -196,9 +217,48 @@ class Booking {
     }
     
     /**
-     * Create Stay-only Booking
+     * Reserve package slots within transaction (uses first available activity)
+     */
+    private function reservePackageSlotsWithinTransaction($sessions, $peopleCount) {
+        foreach ($sessions as $session) {
+            $slotId = $session['slot_id'];
+            $date = $session['session_date'];
+            
+            // Find the first available activity with enough capacity
+            $availableActivity = $this->db->fetch(
+                "SELECT sa.activity_type, sa.max_capacity, COALESCE(saa.booked_count, 0) as booked_count,
+                        (sa.max_capacity - COALESCE(saa.booked_count, 0)) as available_spots
+                 FROM slot_activities sa
+                 LEFT JOIN slot_activity_availability saa ON sa.slot_id = saa.slot_id 
+                     AND saa.booking_date = ? AND saa.activity_type = sa.activity_type
+                 WHERE sa.slot_id = ?
+                 HAVING available_spots >= ?
+                 ORDER BY available_spots DESC
+                 LIMIT 1",
+                [$date, $slotId, $peopleCount]
+            );
+            
+            if (!$availableActivity) {
+                throw new Exception("No activity available for slot on $date");
+            }
+            
+            // Reserve using the available activity
+            $this->slot->reserveActivitySlot(
+                $slotId,
+                $date,
+                $availableActivity['activity_type'],
+                $peopleCount
+            );
+        }
+    }
+    
+    /**
+     * Create Stay-only Booking - UNCHANGED
      */
     public function createStayBooking($bookingData) {
+        if ($this->db->hasActiveTransaction()) {
+            $this->db->forceRollback();
+        }
         $this->db->beginTransaction();
         
         try {
@@ -271,7 +331,7 @@ class Booking {
     }
     
     /**
-     * Get booking by ID with all related data
+     * Get booking by ID with all related data - UPDATED
      */
     public function getById($id) {
         $booking = $this->db->fetch(
@@ -294,14 +354,17 @@ class Booking {
         
         // Get type-specific data
         switch ($booking['booking_type']) {
-            case 'surf_sup':
+            case 'activity':
+            case 'surf_sup': // backward compatibility
                 $specific = $this->db->fetch(
-                    "SELECT ssb.*, s.start_time, s.end_time
-                     FROM surf_sup_bookings ssb
-                     JOIN slots s ON ssb.slot_id = s.id
-                     WHERE ssb.booking_id = ?",
+                    "SELECT ab.*, s.start_time, s.end_time
+                     FROM activity_bookings ab
+                     JOIN slots s ON ab.slot_id = s.id
+                     WHERE ab.booking_id = ?",
                     [$id]
                 );
+                $booking['activity_details'] = $specific;
+                // Also set surf_sup_details for backward compatibility
                 $booking['surf_sup_details'] = $specific;
                 break;
                 
@@ -336,65 +399,7 @@ class Booking {
     }
     
     /**
-     * Get all bookings for admin with filters
-     */
-    public function getAll($filters = []) {
-        $conditions = [];
-        $params = [];
-        
-        if (!empty($filters['date_from'])) {
-            $conditions[] = "DATE(b.created_at) >= ?";
-            $params[] = $filters['date_from'];
-        }
-        
-        if (!empty($filters['date_to'])) {
-            $conditions[] = "DATE(b.created_at) <= ?";
-            $params[] = $filters['date_to'];
-        }
-        
-        if (!empty($filters['booking_type'])) {
-            $conditions[] = "b.booking_type = ?";
-            $params[] = $filters['booking_type'];
-        }
-        
-        if (!empty($filters['payment_status'])) {
-            $conditions[] = "b.payment_status = ?";
-            $params[] = $filters['payment_status'];
-        }
-        
-        if (!empty($filters['search'])) {
-            $searchTerm = '%' . $filters['search'] . '%';
-            $conditions[] = "(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)";
-            $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm]);
-        }
-        
-        $whereClause = !empty($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
-        
-        return $this->db->fetchAll(
-            "SELECT b.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone
-             FROM bookings b
-             JOIN customers c ON b.customer_id = c.id
-             $whereClause
-             ORDER BY b.created_at DESC
-             LIMIT 100",
-            $params
-        );
-    }
-    
-    /**
-     * Update payment status
-     */
-    public function updatePaymentStatus($bookingId, $status, $paymentId = null, $razorpayOrderId = null) {
-        return $this->db->execute(
-            "UPDATE bookings 
-             SET payment_status = ?, payment_id = ?, razorpay_order_id = ?, updated_at = NOW()
-             WHERE id = ?",
-            [$status, $paymentId, $razorpayOrderId, $bookingId]
-        );
-    }
-    
-    /**
-     * Cancel booking
+     * Cancel booking - UPDATED for activity system
      */
     public function cancel($bookingId) {
         $this->db->beginTransaction();
@@ -405,13 +410,16 @@ class Booking {
                 throw new Exception('Booking not found');
             }
             
-            // Release slots for surf/sup and package bookings
-            if ($booking['booking_type'] === 'surf_sup') {
-                $this->slot->releaseSlots([
-                    ['slot_id' => $booking['surf_sup_details']['slot_id'], 
-                     'date' => $booking['surf_sup_details']['session_date']]
-                ], $booking['total_people']);
+            // Release slots based on booking type
+            if ($booking['booking_type'] === 'activity' || $booking['booking_type'] === 'surf_sup') {
+                $this->slot->releaseActivitySlot(
+                    $booking['activity_details']['slot_id'],
+                    $booking['activity_details']['session_date'],
+                    $booking['activity_details']['activity_type'],
+                    $booking['total_people']
+                );
             } elseif ($booking['booking_type'] === 'package') {
+                // For packages, release using legacy method
                 $slots = [];
                 foreach ($booking['sessions'] as $session) {
                     $slots[] = ['slot_id' => $session['slot_id'], 'date' => $session['session_date']];
@@ -435,18 +443,218 @@ class Booking {
     }
     
     /**
+     * Generate booking reference - NEW METHOD
+     */
+    public function generateBookingReference($bookingId, $date, $type) {
+        $typeCode = strtoupper(substr($type, 0, 3));
+        $dateCode = date('ymd', strtotime($date));
+        return "MSC-{$typeCode}-{$bookingId}-{$dateCode}";
+    }
+    
+    /**
+     * Validation for activity booking - NEW METHOD
+     */
+    private function validateActivityBooking($data) {
+        $errors = [];
+        
+        if (empty($data['customer_name'])) {
+            $errors[] = 'Customer name is required';
+        }
+        
+        if (empty($data['customer_email']) || !filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Valid email is required';
+        }
+        
+        if (empty($data['customer_phone'])) {
+            $errors[] = 'Phone number is required';
+        }
+        
+        if (empty($data['activity_type']) || !in_array($data['activity_type'], ['surf', 'sup', 'kayak'])) {
+            $errors[] = 'Valid activity type is required';
+        }
+        
+        if (empty($data['session_date']) || !strtotime($data['session_date'])) {
+            $errors[] = 'Valid session date is required';
+        }
+        
+        if (empty($data['slot_id']) || !is_numeric($data['slot_id'])) {
+            $errors[] = 'Valid slot selection is required';
+        }
+        
+        if (empty($data['people']) || !is_array($data['people'])) {
+            $errors[] = 'At least one person is required';
+        }
+        
+        // Validate each person
+        foreach ($data['people'] as $i => $person) {
+            if (empty($person['name'])) {
+                $errors[] = "Name is required for person " . ($i + 1);
+            }
+            if (empty($person['age']) || !is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
+                $errors[] = "Valid age (5-100) is required for person " . ($i + 1);
+            }
+        }
+        
+        return $errors;
+    }
+    
+    /**
+     * LEGACY METHOD: validateSurfSupBooking - now redirects to activity validation
+     */
+    private function validateSurfSupBooking($data) {
+        // Convert service_type to activity_type for validation
+        if (isset($data['service_type']) && !isset($data['activity_type'])) {
+            $data['activity_type'] = $data['service_type'];
+        }
+        return $this->validateActivityBooking($data);
+    }
+    
+    // Keep all other existing methods unchanged:
+    // - validatePackageBooking()
+    // - validateStayBooking() 
+    // - calculatePackagePrice()
+    // - calculateStayPrice()
+    // - generatePackageSessionDates()
+    // - getAll()
+    // - updatePaymentStatus()
+    // - getStats()
+    
+    /**
+     * Enhanced validation for package booking
+     */
+    private function validatePackageBooking($data) {
+        $errors = [];
+        
+        // Basic customer validation
+        if (empty($data['customer_name'])) {
+            $errors[] = 'Customer name is required';
+        }
+        
+        if (empty($data['customer_email']) || !filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Valid email is required';
+        }
+        
+        if (empty($data['customer_phone'])) {
+            $errors[] = 'Phone number is required';
+        }
+        
+        if (empty($data['service_type']) || !in_array($data['service_type'], ['surf', 'sup'])) {
+            $errors[] = 'Valid service type is required';
+        }
+        
+        if (empty($data['people']) || !is_array($data['people'])) {
+            $errors[] = 'At least one person is required';
+        }
+        
+        // Validate each person
+        if (!empty($data['people'])) {
+            foreach ($data['people'] as $i => $person) {
+                if (empty($person['name'])) {
+                    $errors[] = "Name is required for person " . ($i + 1);
+                }
+                if (empty($person['age']) || !is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
+                    $errors[] = "Valid age (5-100) is required for person " . ($i + 1);
+                }
+            }
+        }
+        
+        // Package-specific validation
+        if (empty($data['package_type']) || !in_array($data['package_type'], 
+            ['1_night_1_session', '1_night_2_sessions', '2_nights_3_sessions'])) {
+            $errors[] = 'Valid package type is required';
+        }
+        
+        if (empty($data['accommodation_type']) || !in_array($data['accommodation_type'], 
+            ['tent', 'dorm', 'cottage'])) {
+            $errors[] = 'Valid accommodation type is required';
+        }
+        
+        if (empty($data['check_in_date']) || !strtotime($data['check_in_date'])) {
+            $errors[] = 'Valid check-in date is required';
+        }
+        
+        // Validate sessions array
+        if (empty($data['sessions']) || !is_array($data['sessions'])) {
+            $errors[] = 'Session information is required';
+        } else {
+            foreach ($data['sessions'] as $i => $session) {
+                if (empty($session['session_date']) || !strtotime($session['session_date'])) {
+                    $errors[] = "Valid session date is required for session " . ($i + 1);
+                }
+                if (empty($session['slot_id']) || !is_numeric($session['slot_id'])) {
+                    $errors[] = "Valid slot selection is required for session " . ($i + 1);
+                }
+            }
+        }
+        
+        // Validate accommodation capacity
+        if (!empty($data['people']) && !empty($data['accommodation_type'])) {
+            try {
+                calculateAccommodationRequirements($data['accommodation_type'], count($data['people']));
+            } catch (Exception $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        
+        return $errors;
+    }
+
+    /**
+     * Enhanced validation for stay booking
+     */
+    private function validateStayBooking($data) {
+        $errors = [];
+        
+        if (empty($data['customer_name'])) {
+            $errors[] = 'Customer name is required';
+        }
+        
+        if (empty($data['customer_email']) || !filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
+            $errors[] = 'Valid email is required';
+        }
+        
+        if (empty($data['customer_phone'])) {
+            $errors[] = 'Phone number is required';
+        }
+        
+        if (empty($data['accommodation_type']) || !in_array($data['accommodation_type'], 
+            ['tent', 'dorm', 'cottage'])) {
+            $errors[] = 'Valid accommodation type is required';
+        }
+        
+        if (empty($data['check_in_date']) || !strtotime($data['check_in_date'])) {
+            $errors[] = 'Valid check-in date is required';
+        }
+        
+        if (empty($data['check_out_date']) || !strtotime($data['check_out_date'])) {
+            $errors[] = 'Valid check-out date is required';
+        }
+        
+        if (empty($data['people']) || !is_array($data['people'])) {
+            $errors[] = 'At least one person is required';
+        }
+        
+        // Validate accommodation capacity
+        if (!empty($data['people']) && !empty($data['accommodation_type'])) {
+            try {
+                calculateAccommodationRequirements($data['accommodation_type'], count($data['people']));
+            } catch (Exception $e) {
+                $errors[] = $e->getMessage();
+            }
+        }
+        
+        return $errors;
+    }
+    
+    /**
      * Calculate package pricing
      */
     public function calculatePackagePrice($packageType, $accommodationType, $peopleCount) {
-        $prices = PACKAGE_PRICES[$packageType];
-        
-        if ($accommodationType === 'cottage') {
-            // Cottage pricing based on number of people (1-4)
-            $cottageKey = 'cottage_' . min($peopleCount, 4);
-            return $prices[$cottageKey];
-        } else {
-            // Tent/dorm pricing per person
-            return $prices[$accommodationType] * $peopleCount;
+        try {
+            $packagePricing = calculatePackagePriceWithCapacity($packageType, $accommodationType, $peopleCount);
+            return $packagePricing['base_amount'];
+        } catch (Exception $e) {
+            throw new Exception("Package booking error: " . $e->getMessage());
         }
     }
     
@@ -454,20 +662,11 @@ class Booking {
      * Calculate stay-only pricing
      */
     public function calculateStayPrice($accommodationType, $peopleCount, $nights, $includesMeals) {
-        if ($accommodationType === 'cottage') {
-            $basePrice = STAY_PRICES['cottage']['base_price'] * $nights;
-            if ($includesMeals) {
-                $mealPrice = STAY_PRICES['cottage']['meal_price_per_person'] * $peopleCount * $nights;
-                return $basePrice + $mealPrice;
-            }
-            return $basePrice;
-        } else {
-            // Tent/dorm pricing per person per night
-            $pricePerNight = $includesMeals ? 
-                STAY_PRICES[$accommodationType]['with_meals'] : 
-                STAY_PRICES[$accommodationType]['without_meals'];
-            
-            return $pricePerNight * $peopleCount * $nights;
+        try {
+            $stayPricing = calculateStayPriceWithCapacity($accommodationType, $peopleCount, $nights, $includesMeals);
+            return $stayPricing['base_amount'];
+        } catch (Exception $e) {
+            throw new Exception("Stay booking error: " . $e->getMessage());
         }
     }
     
@@ -536,117 +735,65 @@ class Booking {
     }
     
     /**
-     * Validation methods
+     * Get all bookings for admin with filters
      */
-    private function validateSurfSupBooking($data) {
-        $errors = [];
+    public function getAll($filters = []) {
+        $conditions = [];
+        $params = [];
         
-        if (empty($data['customer_name'])) {
-            $errors[] = 'Customer name is required';
+        if (!empty($filters['date_from'])) {
+            $conditions[] = "DATE(b.created_at) >= ?";
+            $params[] = $filters['date_from'];
         }
         
-        if (empty($data['customer_email']) || !filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Valid email is required';
+        if (!empty($filters['date_to'])) {
+            $conditions[] = "DATE(b.created_at) <= ?";
+            $params[] = $filters['date_to'];
         }
         
-        if (empty($data['customer_phone'])) {
-            $errors[] = 'Phone number is required';
+        if (!empty($filters['booking_type'])) {
+            $conditions[] = "b.booking_type = ?";
+            $params[] = $filters['booking_type'];
         }
         
-        if (empty($data['service_type']) || !in_array($data['service_type'], ['surf', 'sup'])) {
-            $errors[] = 'Valid service type is required';
+        if (!empty($filters['payment_status'])) {
+            $conditions[] = "b.payment_status = ?";
+            $params[] = $filters['payment_status'];
         }
         
-        if (empty($data['session_date']) || !strtotime($data['session_date'])) {
-            $errors[] = 'Valid session date is required';
+        if (!empty($filters['search'])) {
+            $searchTerm = '%' . $filters['search'] . '%';
+            $conditions[] = "(c.name LIKE ? OR c.email LIKE ? OR c.phone LIKE ?)";
+            $params = array_merge($params, [$searchTerm, $searchTerm, $searchTerm]);
         }
         
-        if (empty($data['slot_id']) || !is_numeric($data['slot_id'])) {
-            $errors[] = 'Valid slot selection is required';
-        }
+        $whereClause = !empty($conditions) ? 'WHERE ' . implode(' AND ', $conditions) : '';
         
-        if (empty($data['people']) || !is_array($data['people'])) {
-            $errors[] = 'At least one person is required';
-        }
-        
-        // Validate each person
-        foreach ($data['people'] as $i => $person) {
-            if (empty($person['name'])) {
-                $errors[] = "Name is required for person " . ($i + 1);
-            }
-            if (empty($person['age']) || !is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
-                $errors[] = "Valid age (5-100) is required for person " . ($i + 1);
-            }
-        }
-        
-        return $errors;
-    }
-    
-    private function validatePackageBooking($data) {
-        $errors = $this->validateSurfSupBooking($data);
-        
-        if (empty($data['package_type']) || !in_array($data['package_type'], 
-            ['1_night_1_session', '1_night_2_sessions', '2_nights_3_sessions'])) {
-            $errors[] = 'Valid package type is required';
-        }
-        
-        if (empty($data['accommodation_type']) || !in_array($data['accommodation_type'], 
-            ['tent', 'dorm', 'cottage'])) {
-            $errors[] = 'Valid accommodation type is required';
-        }
-        
-        if (empty($data['check_in_date']) || !strtotime($data['check_in_date'])) {
-            $errors[] = 'Valid check-in date is required';
-        }
-        
-        if (empty($data['check_out_date']) || !strtotime($data['check_out_date'])) {
-            $errors[] = 'Valid check-out date is required';
-        }
-        
-        if (empty($data['sessions']) || !is_array($data['sessions'])) {
-            $errors[] = 'Session information is required';
-        }
-        
-        return $errors;
-    }
-    
-    private function validateStayBooking($data) {
-        $errors = [];
-        
-        if (empty($data['customer_name'])) {
-            $errors[] = 'Customer name is required';
-        }
-        
-        if (empty($data['customer_email']) || !filter_var($data['customer_email'], FILTER_VALIDATE_EMAIL)) {
-            $errors[] = 'Valid email is required';
-        }
-        
-        if (empty($data['customer_phone'])) {
-            $errors[] = 'Phone number is required';
-        }
-        
-        if (empty($data['accommodation_type']) || !in_array($data['accommodation_type'], 
-            ['tent', 'dorm', 'cottage'])) {
-            $errors[] = 'Valid accommodation type is required';
-        }
-        
-        if (empty($data['check_in_date']) || !strtotime($data['check_in_date'])) {
-            $errors[] = 'Valid check-in date is required';
-        }
-        
-        if (empty($data['check_out_date']) || !strtotime($data['check_out_date'])) {
-            $errors[] = 'Valid check-out date is required';
-        }
-        
-        if (empty($data['people']) || !is_array($data['people'])) {
-            $errors[] = 'At least one person is required';
-        }
-        
-        return $errors;
+        return $this->db->fetchAll(
+            "SELECT b.*, c.name as customer_name, c.email as customer_email, c.phone as customer_phone
+             FROM bookings b
+             JOIN customers c ON b.customer_id = c.id
+             $whereClause
+             ORDER BY b.created_at DESC
+             LIMIT 100",
+            $params
+        );
     }
     
     /**
-     * Get booking statistics for dashboard
+     * Update payment status
+     */
+    public function updatePaymentStatus($bookingId, $status, $paymentId = null, $razorpayOrderId = null) {
+        return $this->db->execute(
+            "UPDATE bookings 
+             SET payment_status = ?, payment_id = ?, razorpay_order_id = ?, updated_at = NOW()
+             WHERE id = ?",
+            [$status, $paymentId, $razorpayOrderId, $bookingId]
+        );
+    }
+    
+    /**
+     * Get booking statistics for dashboard - UPDATED
      */
     public function getStats($dateFrom = null, $dateTo = null) {
         $dateFrom = $dateFrom ?: date('Y-m-01'); // Start of current month
@@ -666,9 +813,9 @@ class Booking {
                 "SELECT COUNT(*) FROM bookings WHERE payment_status = 'pending'"
             ),
             'todays_sessions' => $this->db->count(
-                "SELECT COUNT(*) FROM surf_sup_bookings ssb
-                 JOIN bookings b ON ssb.booking_id = b.id
-                 WHERE ssb.session_date = CURDATE() AND b.booking_status = 'confirmed'
+                "SELECT COUNT(*) FROM activity_bookings ab
+                 JOIN bookings b ON ab.booking_id = b.id
+                 WHERE ab.session_date = CURDATE() AND b.booking_status = 'confirmed'
                  UNION ALL
                  SELECT COUNT(*) FROM package_sessions ps
                  JOIN package_bookings pb ON ps.package_booking_id = pb.id

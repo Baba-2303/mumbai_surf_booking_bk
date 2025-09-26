@@ -143,33 +143,49 @@ function base64url_decode($data) {
 function adminLogin($username, $password) {
     $db = Database::getInstance();
     
-    $admin = $db->fetch(
-        "SELECT * FROM admin_users WHERE username = ? AND is_active = 1",
-        [$username]
-    );
+    // Start the transaction
+    $db->beginTransaction();
     
-    if (!$admin || !password_verify($password, $admin['password_hash'])) {
-        return false;
+    try {
+        $admin = $db->fetch(
+            "SELECT * FROM admin_users WHERE username = ? AND is_active = 1",
+            [$username]
+        );
+        
+        if (!$admin || !password_verify($password, $admin['password_hash'])) {
+            // No need to rollback here as we haven't written anything, but it's good practice.
+            $db->rollback(); 
+            return false;
+        }
+        
+        // Update last login
+        $db->execute(
+            "UPDATE admin_users SET last_login = NOW() WHERE id = ?",
+            [$admin['id']]
+        );
+        
+        // If everything succeeded, commit the transaction
+        $db->commit();
+        
+        // Create token AFTER committing the transaction
+        $token = createToken($admin);
+        
+        return [
+            'token' => $token,
+            'admin' => [
+                'id' => $admin['id'],
+                'username' => $admin['username'],
+                'email' => $admin['email'],
+                'full_name' => $admin['full_name']
+            ],
+            'expires_in' => SESSION_TIMEOUT
+        ];
+
+    } catch (Exception $e) {
+        // If any error occurred, roll back the transaction
+        $db->rollback();
+        // Re-throw the exception to be caught by the endpoint handler
+        throw $e;
     }
-    
-    // Update last login
-    $db->execute(
-        "UPDATE admin_users SET last_login = NOW() WHERE id = ?",
-        [$admin['id']]
-    );
-    
-    // Create token
-    $token = createToken($admin);
-    
-    return [
-        'token' => $token,
-        'admin' => [
-            'id' => $admin['id'],
-            'username' => $admin['username'],
-            'email' => $admin['email'],
-            'full_name' => $admin['full_name']
-        ],
-        'expires_in' => SESSION_TIMEOUT
-    ];
 }
 ?>
