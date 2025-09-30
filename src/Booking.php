@@ -1,8 +1,8 @@
 <?php
 /**
- * Updated Booking Management Class
+ * Enhanced Booking Management Class
  * Handles all booking operations: Activity, Packages, and Stay-only
- * Now supports activity-based capacity system
+ * Now supports activity-based capacity system with auto-allocation
  */
 
 class Booking {
@@ -17,7 +17,7 @@ class Booking {
     }
     
     /**
-     * Create Activity Booking (Surf/SUP/Kayak) - NEW METHOD
+     * Create Activity Booking (Surf/SUP/Kayak)
      */
     public function createActivityBooking($bookingData) {
         if ($this->db->hasActiveTransaction()) {
@@ -114,7 +114,7 @@ class Booking {
     }
     
     /**
-     * Create Package Booking - UPDATED to work with new slot system
+     * ENHANCED: Create Package Booking with auto-allocation
      */
     public function createPackageBooking($bookingData) {
         if ($this->db->hasActiveTransaction()) {
@@ -133,6 +133,29 @@ class Booking {
             $nights = (strpos($bookingData['package_type'], '2_nights') !== false) ? 2 : 1;
             $bookingData['check_out_date'] = date('Y-m-d', strtotime($bookingData['check_in_date'] . ' +' . $nights . ' days'));
             
+            // ENHANCED: Auto-allocation logic for missing slot IDs
+            $autoAllocatedSessions = [];
+            foreach ($bookingData['sessions'] as &$session) {
+                if (empty($session['slot_id'])) {
+                    $autoSlot = $this->slot->getNextAvailableSlot(
+                        $session['session_date'], 
+                        count($bookingData['people'])
+                    );
+                    
+                    if (!$autoSlot) {
+                        throw new Exception('No available slots for session on ' . $session['session_date']);
+                    }
+                    
+                    $session['slot_id'] = $autoSlot['id'];
+                    $session['auto_allocated'] = true;
+                    $autoAllocatedSessions[] = [
+                        'date' => $session['session_date'],
+                        'slot_id' => $autoSlot['id'],
+                        'time' => $this->slot->formatSlotTime($autoSlot['start_time'], $autoSlot['end_time'])
+                    ];
+                }
+            }
+            
             // Create or get customer
             $customerId = $this->customer->createOrGet(
                 $bookingData['customer_name'],
@@ -149,7 +172,7 @@ class Booking {
             );
             $pricing = calculateTotalAmount($packagePrice);
             
-            // Check all session slots availability (using legacy method for packages)
+            // Check all session slots availability (after auto-allocation)
             foreach ($bookingData['sessions'] as $session) {
                 if (!$this->slot->hasAvailability(
                     $session['slot_id'],
@@ -162,14 +185,16 @@ class Booking {
             
             // Create main booking record
             $bookingId = $this->db->insert(
-                "INSERT INTO bookings (customer_id, booking_type, total_people, base_amount, gst_amount, total_amount)
-                 VALUES (?, 'package', ?, ?, ?, ?)",
+                "INSERT INTO bookings (customer_id, booking_type, total_people, base_amount, gst_amount, total_amount, notes)
+                 VALUES (?, 'package', ?, ?, ?, ?, ?)",
                 [
                     $customerId,
                     $peopleCount,
                     $pricing['base_amount'],
                     $pricing['gst_amount'],
-                    $pricing['total_amount']
+                    $pricing['total_amount'],
+                    !empty($autoAllocatedSessions) ? 
+                        'Auto-allocated sessions: ' . json_encode($autoAllocatedSessions) : null
                 ]
             );
             
@@ -443,7 +468,7 @@ class Booking {
     }
     
     /**
-     * Generate booking reference - NEW METHOD
+     * Generate booking reference
      */
     public function generateBookingReference($bookingId, $date, $type) {
         $typeCode = strtoupper(substr($type, 0, 3));
@@ -452,7 +477,7 @@ class Booking {
     }
     
     /**
-     * Validation for activity booking - NEW METHOD
+     * Validation for activity booking
      */
     private function validateActivityBooking($data) {
         $errors = [];
@@ -509,16 +534,6 @@ class Booking {
         return $this->validateActivityBooking($data);
     }
     
-    // Keep all other existing methods unchanged:
-    // - validatePackageBooking()
-    // - validateStayBooking() 
-    // - calculatePackagePrice()
-    // - calculateStayPrice()
-    // - generatePackageSessionDates()
-    // - getAll()
-    // - updatePaymentStatus()
-    // - getStats()
-    
     /**
      * Enhanced validation for package booking
      */
@@ -573,16 +588,26 @@ class Booking {
             $errors[] = 'Valid check-in date is required';
         }
         
-        // Validate sessions array
+        // ENHANCED: Validate sessions array with auto-allocation support
         if (empty($data['sessions']) || !is_array($data['sessions'])) {
             $errors[] = 'Session information is required';
         } else {
+            // Check session count matches package type
+            $expectedSessions = 1;
+            if (strpos($data['package_type'], '2_sessions') !== false) $expectedSessions = 2;
+            if (strpos($data['package_type'], '3_sessions') !== false) $expectedSessions = 3;
+            
+            if (count($data['sessions']) !== $expectedSessions) {
+                $errors[] = "Package requires exactly $expectedSessions sessions, got " . count($data['sessions']);
+            }
+            
             foreach ($data['sessions'] as $i => $session) {
                 if (empty($session['session_date']) || !strtotime($session['session_date'])) {
                     $errors[] = "Valid session date is required for session " . ($i + 1);
                 }
-                if (empty($session['slot_id']) || !is_numeric($session['slot_id'])) {
-                    $errors[] = "Valid slot selection is required for session " . ($i + 1);
+                // Note: slot_id is optional now due to auto-allocation
+                if (!empty($session['slot_id']) && !is_numeric($session['slot_id'])) {
+                    $errors[] = "Invalid slot selection for session " . ($i + 1);
                 }
             }
         }
@@ -793,7 +818,7 @@ class Booking {
     }
     
     /**
-     * Get booking statistics for dashboard - UPDATED
+     * Get booking statistics for dashboard
      */
     public function getStats($dateFrom = null, $dateTo = null) {
         $dateFrom = $dateFrom ?: date('Y-m-01'); // Start of current month

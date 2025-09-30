@@ -114,8 +114,19 @@ function handleCreateActivityBooking($booking) {
     if (!in_array($data['session_date'], $validDates)) {
         sendError('Session date is outside booking window', 'VALIDATION_ERROR', 422);
     }
+
+    
     
     try {
+        // Verify slot exists for this date
+        $slotValidation = $slot->validateSlotForDate($data['slot_id'], $data['session_date'], $data['activity_type']);
+        if (!$slotValidation) {
+            sendError(
+                'Invalid slot selection for this date and activity. Please select from the available time slots.',
+                'INVALID_SLOT',
+                422
+            );
+        }
         // Check activity slot availability before creating booking
         if (!$slot->hasActivityAvailability($data['slot_id'], $data['session_date'], $data['activity_type'], count($data['people']))) {
             sendError('Selected activity slot is no longer available', 'SLOT_UNAVAILABLE', 409);
@@ -248,6 +259,18 @@ function handleCreatePackageBooking($booking) {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $data['check_in_date']) || !strtotime($data['check_in_date'])) {
         sendError('Invalid check-in date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
     }
+
+    //Validate check-in date is within booking window
+    $bookingWindow = getWeeklyBookingWindow();
+    $validDates = array_column($bookingWindow['dates'], 'date');
+
+    if (!in_array($data['check_in_date'], $validDates)) {
+        sendError('Check-in date is outside booking window. Bookings can only be made from today until next Monday.', 'INVALID_DATE', 422);
+    }
+    // Prevent past date bookings
+    if (strtotime($data['check_in_date']) < strtotime(date('Y-m-d'))) {
+        sendError('Cannot book for past dates', 'INVALID_DATE', 422);
+    }
     
     // Calculate check-out date based on package type
     $nights = (strpos($data['package_type'], '2_nights') !== false) ? 2 : 1;
@@ -283,15 +306,90 @@ function handleCreatePackageBooking($booking) {
         if (empty($session['session_date']) || !strtotime($session['session_date'])) {
             sendError("Valid session date is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
         }
+        // 1. Validate session date is within booking window
+        if (!in_array($session['session_date'], $validDates)) {
+            sendError(
+                "Session " . ($index + 1) . " date ({$session['session_date']}) is outside booking window",
+                'INVALID_DATE',
+                422
+            );
+        }
+        
+        // 2. Prevent past date sessions
+        if (strtotime($session['session_date']) < strtotime(date('Y-m-d'))) {
+            sendError("Cannot book sessions for past dates (session " . ($index + 1) . ")", 'INVALID_DATE', 422);
+        }
+        
+        // 3. Validate slot_id
         if (empty($session['slot_id']) || !is_numeric($session['slot_id'])) {
             sendError("Valid slot selection is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
         }
     }
+
+    // Validate session dates match package requirements
+    $expectedSessionDates = [];
+    $checkInDate = new DateTime($data['check_in_date']);
+
+    if ($data['package_type'] === '1_night_1_session') {
+        // Only checkout day
+        $sessionDate = clone $checkInDate;
+        $sessionDate->modify('+1 day');
+        $expectedSessionDates[] = $sessionDate->format('Y-m-d');
+        
+    } elseif ($data['package_type'] === '1_night_2_sessions') {
+        // Check-in day + Checkout day
+        $expectedSessionDates[] = $checkInDate->format('Y-m-d');
+        $sessionDate = clone $checkInDate;
+        $sessionDate->modify('+1 day');
+        $expectedSessionDates[] = $sessionDate->format('Y-m-d');
+        
+    } elseif ($data['package_type'] === '2_nights_3_sessions') {
+        // Day 1, Day 2, Day 3
+        $expectedSessionDates[] = $checkInDate->format('Y-m-d');
+        $sessionDate = clone $checkInDate;
+        $sessionDate->modify('+1 day');
+        $expectedSessionDates[] = $sessionDate->format('Y-m-d');
+        $sessionDate->modify('+1 day');
+        $expectedSessionDates[] = $sessionDate->format('Y-m-d');
+    }
+
+    // Collect actual session dates from request
+    $actualSessionDates = array_column($data['sessions'], 'session_date');
+
+    // Check for duplicate session dates
+    if (count($actualSessionDates) !== count(array_unique($actualSessionDates))) {
+        sendError(
+            'Cannot book multiple sessions on the same date. Each session must be on a different day.',
+            'DUPLICATE_SESSION_DATE',
+            422
+        );
+    }
+
+    // Validate sessions are in correct chronological order
+    $sortedActualDates = $actualSessionDates;
+    sort($sortedActualDates);
+    if ($sortedActualDates !== $expectedSessionDates) {
+        sendError(
+            'Session dates must match package schedule. Expected: ' . implode(' → ', $expectedSessionDates) . '. Received: ' . implode(', ', $actualSessionDates),
+            'INVALID_SESSION_SCHEDULE',
+            422
+        );
+    }
+
     
     try {
         // Check all session slots availability (using legacy method for packages)
         $slot = new Slot();
         foreach ($data['sessions'] as $session) {
+            // Verify slot exists for this date
+            $slotValidation = $slot->validateSlotForDate($session['slot_id'], $session['session_date'], $data['service_type']);
+            if (!$slotValidation) {
+                sendError(
+                    "Invalid slot {$session['slot_id']} for session on {$session['session_date']}",
+                    'INVALID_SLOT',
+                    422
+                );
+            }
             if (!$slot->hasAvailability($session['slot_id'], $session['session_date'], count($data['people']))) {
                 sendError('Session slot on ' . $session['session_date'] . ' is no longer available', 'SLOT_UNAVAILABLE', 409);
             }
@@ -329,12 +427,7 @@ function handleCreateStayBooking($booking) {
         'people'
     ]);
     
-    // Validate accommodation type
-    if (!in_array($data['accommodation_type'], ['tent', 'dorm', 'cottage'])) {
-        sendError('Invalid accommodation type', 'VALIDATION_ERROR', 422);
-    }
-    
-    // Validate dates
+    // Validate dates FIRST
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $data['check_in_date']) || !strtotime($data['check_in_date'])) {
         sendError('Invalid check-in date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
     }
@@ -348,10 +441,39 @@ function handleCreateStayBooking($booking) {
         sendError('Check-out date must be after check-in date', 'VALIDATION_ERROR', 422);
     }
     
-    // Calculate nights
+    // Calculate nights FIRST
     $checkIn = new DateTime($data['check_in_date']);
     $checkOut = new DateTime($data['check_out_date']);
-    $data['nights_count'] = $checkOut->diff($checkIn)->days;
+    $nightsCount = $checkOut->diff($checkIn)->days;
+    $data['nights_count'] = $nightsCount;
+
+    // Validate check-in date is within booking window
+    $bookingWindow = getWeeklyBookingWindow();
+    $validDates = array_column($bookingWindow['dates'], 'date');
+
+    if (!in_array($data['check_in_date'], $validDates)) {
+        sendError('Check-in date is outside booking window', 'INVALID_DATE', 422);
+    }
+
+    // Prevent past date bookings
+    if (strtotime($data['check_in_date']) < strtotime(date('Y-m-d'))) {
+        sendError('Cannot book for past dates', 'INVALID_DATE', 422);
+    }
+    
+    // NOW validate accommodation with nights_count
+    if (!in_array($data['accommodation_type'], ['tent', 'dorm', 'cottage'])) {
+        sendError('Invalid accommodation type', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Extended stay validation (6N7D)
+    if ($nightsCount === 6 && $data['accommodation_type'] !== 'dorm') {
+        sendError('Extended stay (6 nights/7 days) is only available for dorm accommodation', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Auto-set to dorm for extended stay
+    if ($nightsCount === 6) {
+        $data['accommodation_type'] = 'dorm';
+    }
     
     // Set meals flag
     $data['includes_meals'] = isset($data['includes_meals']) ? (bool)$data['includes_meals'] : false;

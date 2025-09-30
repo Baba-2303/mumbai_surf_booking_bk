@@ -72,7 +72,23 @@ class Slot {
         
         return $slots;
     }
-    
+    /**
+     * Validate if slot exists for specific date and activity
+     */
+    public function validateSlotForDate($slotId, $date, $activityType) {
+        $dayOfWeek = date('N', strtotime($date));
+        
+        $slot = $this->db->fetch(
+            "SELECT s.id, s.start_time, s.end_time, sa.activity_type, sa.max_capacity
+            FROM slots s
+            JOIN slot_activities sa ON s.id = sa.slot_id
+            WHERE s.id = ? AND s.day_of_week = ? AND s.is_active = 1 
+            AND sa.activity_type = ?",
+            [$slotId, $dayOfWeek, $activityType]
+        );
+        
+        return $slot !== false ? $slot : null;
+    }
     /**
      * Get all slots for admin (weekly schedule) with activity capacities
      */

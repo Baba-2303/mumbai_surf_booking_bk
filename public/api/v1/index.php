@@ -85,6 +85,11 @@ try {
             require_once 'endpoints/utils.php';
             handleUtilsEndpoint($method, $resource, $id ?? '');
             break;
+
+        case 'activities':
+            require_once 'endpoints/activities.php';
+            handleActivitiesEndpoint($method, $resource, $id);
+            break;
             
         case 'admin':
             // Check authentication for admin endpoints
