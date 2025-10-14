@@ -11,10 +11,11 @@ function handleSlotsEndpoint($method, $resource, $id) {
         case 'GET':
             if ($resource === 'dates') {
                 handleGetBookableDates($slot);
+            } elseif ($resource === 'all-activities') {  // ✅ NEW
+                handleGetAllActivitiesSlots($slot);
             } elseif ($resource === 'activities') {
                 handleGetActivitySlots($slot);
             } elseif (empty($resource)) {
-                // Legacy endpoint - maintain backward compatibility
                 handleGetAvailableSlots($slot);
             } else {
                 sendError('Invalid slots endpoint', 'NOT_FOUND', 404);
@@ -23,6 +24,98 @@ function handleSlotsEndpoint($method, $resource, $id) {
             
         default:
             sendError('Method not allowed', 'METHOD_NOT_ALLOWED', 405);
+    }
+}
+
+/**
+ * NEW: GET /slots/all-activities?date=2025-09-28&people=8
+ * Returns slot availability for ALL activities on given date
+ */
+function handleGetAllActivitiesSlots($slot) {
+    $date = $_GET['date'] ?? '';
+    $people = (int)($_GET['people'] ?? 1);
+    
+    // Validate parameters
+    if (empty($date)) {
+        sendError('Date parameter is required', 'VALIDATION_ERROR', 422);
+    }
+    
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) || !strtotime($date)) {
+        sendError('Invalid date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Validate people count
+    if ($people < 1 || $people > 40) {
+        sendError('People count must be between 1 and 40', 'VALIDATION_ERROR', 422);
+    }
+    
+    // Check if date is within booking window
+    $bookableDates = $slot->getBookableDates();
+    $validDates = array_column($bookableDates, 'date');
+    
+    if (!in_array($date, $validDates)) {
+        sendError('Date is outside booking window', 'VALIDATION_ERROR', 422);
+    }
+    
+    try {
+        $dayOfWeek = date('N', strtotime($date));
+        $db = Database::getInstance();
+        
+        // Get all slots for this day with ALL activity capacities
+        $slots = $db->fetchAll(
+            "SELECT s.id, s.start_time, s.end_time,
+                    sa.activity_type, sa.max_capacity,
+                    COALESCE(saa.booked_count, 0) as booked_count,
+                    (sa.max_capacity - COALESCE(saa.booked_count, 0)) as available_spots
+             FROM slots s
+             JOIN slot_activities sa ON s.id = sa.slot_id
+             LEFT JOIN slot_activity_availability saa 
+                 ON s.id = saa.slot_id 
+                 AND saa.booking_date = ? 
+                 AND saa.activity_type = sa.activity_type
+             WHERE s.day_of_week = ? AND s.is_active = 1
+             ORDER BY s.start_time, sa.activity_type",
+            [$date, $dayOfWeek]
+        );
+        
+        // Group by slot_id
+        $groupedSlots = [];
+        foreach ($slots as $row) {
+            $slotId = $row['id'];
+            
+            if (!isset($groupedSlots[$slotId])) {
+                $groupedSlots[$slotId] = [
+                    'slot_id' => $slotId,
+                    'start_time' => $row['start_time'],
+                    'end_time' => $row['end_time'],
+                    'formatted_time' => $slot->formatSlotTime($row['start_time'], $row['end_time']),
+                    'activities' => []
+                ];
+            }
+            
+            $groupedSlots[$slotId]['activities'][$row['activity_type']] = [
+                'max_capacity' => (int)$row['max_capacity'],
+                'booked_count' => (int)$row['booked_count'],
+                'available_spots' => (int)$row['available_spots'],
+                'can_book' => $row['available_spots'] >= $people,
+                'status' => $row['available_spots'] >= 10 ? 'good' : 
+                           ($row['available_spots'] > 0 ? 'limited' : 'full')
+            ];
+        }
+        
+        $response = [
+            'date' => $date,
+            'day_name' => date('l', strtotime($date)),
+            'formatted_date' => date('M d, Y', strtotime($date)),
+            'people_count' => $people,
+            'available_slots' => array_values($groupedSlots),
+            'total_slots' => count($groupedSlots)
+        ];
+        
+        sendResponse(true, $response);
+        
+    } catch (Exception $e) {
+        sendError('Failed to retrieve slots: ' . $e->getMessage(), 'INTERNAL_ERROR', 500);
     }
 }
 

@@ -39,24 +39,37 @@ class Booking {
                 $bookingData['customer_phone']
             );
             
-            // Calculate pricing
+            // ✅ NEW: Group people by activity to check capacity for each
+            $activityGroups = [];
+            foreach ($bookingData['people'] as $person) {
+                $activity = $person['activity_type'];
+                if (!isset($activityGroups[$activity])) {
+                    $activityGroups[$activity] = [];
+                }
+                $activityGroups[$activity][] = $person;
+            }
+            
+            // ✅ NEW: Validate capacity for EACH activity
+            foreach ($activityGroups as $activityType => $people) {
+                $count = count($people);
+                if (!$this->slot->hasActivityAvailability(
+                    $bookingData['slot_id'],
+                    $bookingData['session_date'],
+                    $activityType,
+                    $count
+                )) {
+                    throw new Exception("Selected slot doesn't have capacity for $count people doing $activityType");
+                }
+            }
+            
+            // Calculate pricing (same base price for all activities)
             $peopleCount = count($bookingData['people']);
             $pricing = calculateTotalAmount(SURF_SUP_BASE_PRICE * $peopleCount);
-            
-            // Check activity slot availability
-            if (!$this->slot->hasActivityAvailability(
-                $bookingData['slot_id'],
-                $bookingData['session_date'],
-                $bookingData['activity_type'],
-                $peopleCount
-            )) {
-                throw new Exception('Selected activity slot is no longer available');
-            }
             
             // Create main booking record
             $bookingId = $this->db->insert(
                 "INSERT INTO bookings (customer_id, booking_type, total_people, base_amount, gst_amount, total_amount)
-                 VALUES (?, 'activity', ?, ?, ?, ?)",
+                VALUES (?, 'activity', ?, ?, ?, ?)",
                 [
                     $customerId,
                     $peopleCount,
@@ -66,34 +79,45 @@ class Booking {
                 ]
             );
             
-            // Create activity specific record
+            // ✅ MODIFIED: Determine primary activity (most common in group)
+            $activityCounts = array_map('count', $activityGroups);
+            arsort($activityCounts);
+            $primaryActivity = key($activityCounts);
+            
             $this->db->insert(
-                "INSERT INTO activity_bookings (booking_id, service_type, activity_type, session_date, slot_id)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO activity_bookings (booking_id, activity_type, session_date, slot_id)
+                VALUES (?, ?, ?, ?)",
                 [
                     $bookingId,
-                    $bookingData['activity_type'], // service_type for backward compatibility
-                    $bookingData['activity_type'],
+                    $primaryActivity,
                     $bookingData['session_date'],
                     $bookingData['slot_id']
                 ]
             );
             
-            // Add people to booking
+            // ✅ MODIFIED: Add people WITH activity_type
             foreach ($bookingData['people'] as $person) {
                 $this->db->insert(
-                    "INSERT INTO booking_people (booking_id, name, age) VALUES (?, ?, ?)",
-                    [$bookingId, $person['name'], $person['age']]
+                    "INSERT INTO booking_people (booking_id, name, age, activity_type) 
+                    VALUES (?, ?, ?, ?)",
+                    [
+                        $bookingId, 
+                        $person['name'], 
+                        $person['age'],
+                        $person['activity_type']  // ✅ NEW FIELD
+                    ]
                 );
             }
             
-            // Reserve the activity slot
-            $this->slot->reserveActivitySlot(
-                $bookingData['slot_id'],
-                $bookingData['session_date'],
-                $bookingData['activity_type'],
-                $peopleCount
-            );
+            // ✅ MODIFIED: Reserve capacity for EACH activity
+            foreach ($activityGroups as $activityType => $people) {
+                $this->slot->reserveActivitySlot(
+                    $bookingData['slot_id'],
+                    $bookingData['session_date'],
+                    $activityType,
+                    count($people)
+                );
+            }
             
             $this->db->commit();
             return $bookingId;
@@ -371,15 +395,38 @@ class Booking {
             return null;
         }
         
-        // Get people
+        // ✅ MODIFIED: Get people WITH activity_type
         $booking['people'] = $this->db->fetchAll(
-            "SELECT name, age FROM booking_people WHERE booking_id = ?",
+            "SELECT name, age, activity_type FROM booking_people WHERE booking_id = ?",
             [$id]
         );
         
+        // ✅ NEW: Add activity breakdown
+        if ($booking['booking_type'] === 'activity') {
+            $activityBreakdown = $this->db->fetchAll(
+                "SELECT activity_type, COUNT(*) as count 
+                FROM booking_people 
+                WHERE booking_id = ? 
+                GROUP BY activity_type",
+                [$id]
+            );
+            $booking['activity_breakdown'] = $activityBreakdown;
+        }
+        
         // Get type-specific data
         switch ($booking['booking_type']) {
-            case 'activity':
+            case 'activity': 
+                $specific = $this->db->fetch(
+                    "SELECT ab.id, ab.booking_id, ab.activity_type, ab.session_date, ab.slot_id,
+                            s.start_time, s.end_time
+                    FROM activity_bookings ab
+                    JOIN slots s ON ab.slot_id = s.id
+                    WHERE ab.booking_id = ?",
+                    [$id]
+                );
+                $booking['activity_details'] = $specific;
+                break;
+                
             case 'surf_sup': // backward compatibility
                 $specific = $this->db->fetch(
                     "SELECT ab.*, s.start_time, s.end_time
@@ -435,16 +482,29 @@ class Booking {
                 throw new Exception('Booking not found');
             }
             
-            // Release slots based on booking type
-            if ($booking['booking_type'] === 'activity' || $booking['booking_type'] === 'surf_sup') {
-                $this->slot->releaseActivitySlot(
-                    $booking['activity_details']['slot_id'],
-                    $booking['activity_details']['session_date'],
-                    $booking['activity_details']['activity_type'],
-                    $booking['total_people']
-                );
+            // ✅ MODIFIED: Release capacity for EACH activity
+            if ($booking['booking_type'] === 'activity') {
+                // Group people by activity
+                $activityGroups = [];
+                foreach ($booking['people'] as $person) {
+                    $activity = $person['activity_type'];
+                    if (!isset($activityGroups[$activity])) {
+                        $activityGroups[$activity] = 0;
+                    }
+                    $activityGroups[$activity]++;
+                }
+                
+                // Release capacity for each activity
+                foreach ($activityGroups as $activityType => $count) {
+                    $this->slot->releaseActivitySlot(
+                        $booking['activity_details']['slot_id'],
+                        $booking['activity_details']['session_date'],
+                        $activityType,
+                        $count
+                    );
+                }
             } elseif ($booking['booking_type'] === 'package') {
-                // For packages, release using legacy method
+                // Existing package cancellation logic
                 $slots = [];
                 foreach ($booking['sessions'] as $session) {
                     $slots[] = ['slot_id' => $session['slot_id'], 'date' => $session['session_date']];
@@ -494,10 +554,6 @@ class Booking {
             $errors[] = 'Phone number is required';
         }
         
-        if (empty($data['activity_type']) || !in_array($data['activity_type'], ['surf', 'sup', 'kayak'])) {
-            $errors[] = 'Valid activity type is required';
-        }
-        
         if (empty($data['session_date']) || !strtotime($data['session_date'])) {
             $errors[] = 'Valid session date is required';
         }
@@ -511,12 +567,17 @@ class Booking {
         }
         
         // Validate each person
+        $validActivities = ['surf', 'sup', 'kayak'];
         foreach ($data['people'] as $i => $person) {
             if (empty($person['name'])) {
                 $errors[] = "Name is required for person " . ($i + 1);
             }
             if (empty($person['age']) || !is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
                 $errors[] = "Valid age (5-100) is required for person " . ($i + 1);
+            }
+            // ✅ NEW: Validate activity_type for each person
+            if (empty($person['activity_type']) || !in_array($person['activity_type'], $validActivities)) {
+                $errors[] = "Valid activity selection is required for person " . ($i + 1);
             }
         }
         

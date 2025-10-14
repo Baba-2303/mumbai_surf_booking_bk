@@ -1,6 +1,9 @@
 <?php
 /**
- * Authentication Middleware
+ * ENHANCED Authentication Middleware
+ * ✅ Fixed transaction management
+ * ✅ Added rate limiting
+ * ✅ Added login attempt logging
  */
 
 /**
@@ -138,13 +141,11 @@ function base64url_decode($data) {
 }
 
 /**
- * Admin login function
+ * ✅ FIXED: Admin login function - removed transaction management
+ * Transactions should be managed at endpoint level, not here
  */
 function adminLogin($username, $password) {
     $db = Database::getInstance();
-    
-    // Start the transaction
-    $db->beginTransaction();
     
     try {
         $admin = $db->fetch(
@@ -153,21 +154,16 @@ function adminLogin($username, $password) {
         );
         
         if (!$admin || !password_verify($password, $admin['password_hash'])) {
-            // No need to rollback here as we haven't written anything, but it's good practice.
-            $db->rollback(); 
             return false;
         }
         
-        // Update last login
+        // Update last login (simple query, no transaction needed)
         $db->execute(
             "UPDATE admin_users SET last_login = NOW() WHERE id = ?",
             [$admin['id']]
         );
         
-        // If everything succeeded, commit the transaction
-        $db->commit();
-        
-        // Create token AFTER committing the transaction
+        // Create token
         $token = createToken($admin);
         
         return [
@@ -180,12 +176,118 @@ function adminLogin($username, $password) {
             ],
             'expires_in' => SESSION_TIMEOUT
         ];
-
     } catch (Exception $e) {
-        // If any error occurred, roll back the transaction
-        $db->rollback();
-        // Re-throw the exception to be caught by the endpoint handler
         throw $e;
     }
+}
+
+/**
+ * ✅ NEW: Rate limiting for login attempts
+ * Prevents brute force attacks
+ */
+function checkLoginRateLimit($identifier, $maxAttempts = 5, $window = 900) {
+    $cacheDir = dirname(__DIR__, 3) . '/logs/rate_limits';
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0755, true);
+    }
+    
+    $cacheFile = $cacheDir . '/login_' . md5($identifier) . '.json';
+    
+    $attempts = [];
+    if (file_exists($cacheFile)) {
+        $content = file_get_contents($cacheFile);
+        $attempts = json_decode($content, true) ?: [];
+    }
+    
+    // Remove old attempts outside the time window
+    $now = time();
+    $attempts = array_filter($attempts, function($timestamp) use ($now, $window) {
+        return ($now - $timestamp) < $window;
+    });
+    
+    // Check if limit exceeded
+    if (count($attempts) >= $maxAttempts) {
+        return false; // Rate limited!
+    }
+    
+    // Add current attempt
+    $attempts[] = $now;
+    file_put_contents($cacheFile, json_encode($attempts));
+    
+    return true; // Allowed
+}
+
+/**
+ * ✅ NEW: Log failed login attempts
+ * Helps track security issues
+ */
+function logFailedLogin($ip, $username) {
+    $logDir = dirname(__DIR__, 3) . '/logs';
+    if (!is_dir($logDir)) {
+        mkdir($logDir, 0755, true);
+    }
+    
+    $logFile = $logDir . '/failed_logins.log';
+    
+    $logEntry = date('Y-m-d H:i:s') . " - IP: $ip - Username: $username\n";
+    error_log($logEntry, 3, $logFile);
+}
+
+/**
+ * ✅ NEW: Check API rate limit (for booking endpoints)
+ * Prevents API abuse
+ */
+function checkApiRateLimit($identifier, $maxRequests = 100, $window = 3600) {
+    $cacheDir = dirname(__DIR__, 3) . '/logs/rate_limits';
+    if (!is_dir($cacheDir)) {
+        mkdir($cacheDir, 0755, true);
+    }
+    
+    $cacheFile = $cacheDir . '/api_' . md5($identifier) . '.json';
+    
+    $requests = [];
+    if (file_exists($cacheFile)) {
+        $content = file_get_contents($cacheFile);
+        $requests = json_decode($content, true) ?: [];
+    }
+    
+    $now = time();
+    $requests = array_filter($requests, function($timestamp) use ($now, $window) {
+        return ($now - $timestamp) < $window;
+    });
+    
+    if (count($requests) >= $maxRequests) {
+        return false;
+    }
+    
+    $requests[] = $now;
+    file_put_contents($cacheFile, json_encode($requests));
+    
+    return true;
+}
+
+/**
+ * ✅ NEW: Create initial admin user (run this once)
+ * Usage: Call this function from a setup script
+ */
+function createAdminUser($username, $password, $email, $fullName) {
+    $db = Database::getInstance();
+    
+    // Check if admin already exists
+    $existing = $db->fetch(
+        "SELECT id FROM admin_users WHERE username = ?",
+        [$username]
+    );
+    
+    if ($existing) {
+        throw new Exception("Admin user already exists");
+    }
+    
+    $passwordHash = password_hash($password, PASSWORD_BCRYPT, ['cost' => 12]);
+    
+    return $db->insert(
+        "INSERT INTO admin_users (username, password_hash, email, full_name) VALUES (?, ?, ?, ?)",
+        [$username, $passwordHash, $email, $fullName]
+    );
 }
 ?>

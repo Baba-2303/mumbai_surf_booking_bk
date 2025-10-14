@@ -26,7 +26,7 @@
 // These constants tell PHP how to connect to your MySQL database
 // IMPORTANT: define() creates constants that never change during runtime
 
-define('DB_HOST', '127.0.0.1');           // Database server location (127.0.0.1 = your local machine)
+define('DB_HOST', '127.0.0.1:3307');           // Database server location (127.0.0.1 = your local machine with 3307 port as 3306 is used by XAMPP)
 define('DB_NAME', 'mumbai_surf_booking'); // Name of the database we created
 define('DB_USER', 'booking_user');        // MySQL username with access permissions
 define('DB_PASS', 'admin@mumbai');        // Password for the database user

@@ -221,12 +221,11 @@ class ActivityBooking {
             
             // Create activity specific record
             $this->db->insert(
-                "INSERT INTO activity_bookings (booking_id, service_type, activity_type, session_date, slot_id)
-                 VALUES (?, ?, ?, ?, ?)",
+                "INSERT INTO activity_bookings (booking_id, activity_type, session_date, slot_id)
+                VALUES (?, ?, ?, ?)",
                 [
                     $bookingId,
-                    $bookingData['activity_type'], // service_type for backward compatibility
-                    $bookingData['activity_type'],
+                    $primaryActivity,
                     $bookingData['session_date'],
                     $bookingData['slot_id']
                 ]

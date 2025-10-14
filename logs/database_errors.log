@@ -1,7 +1,7 @@
-2025-09-29 21:30:08 - DATABASE ERROR
+2025-10-13 18:19:51 - DATABASE ERROR
 SQL: INSERT INTO activity_bookings (booking_id, service_type, activity_type, session_date, slot_id)
-                 VALUES (?, ?, ?, ?, ?)
-Params: ["36","kayak","kayak","2025-09-29",1]
+                VALUES (?, ?, ?, ?, ?)
+Params: ["2","kayak","kayak","2025-10-13",1]
 Error: SQLSTATE[01000]: Warning: 1265 Data truncated for column 'service_type' at row 1
 File: /Users/adarshyadav/Projects/mumbai-surf-booking/src/Database.php Line: 54
 --------------------------------
