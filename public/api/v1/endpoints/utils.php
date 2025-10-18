@@ -27,6 +27,8 @@ function handleUtilsEndpoint($method, $resource, $id) {
                 handleValidateBookingData();
             } elseif ($resource === 'validate-package-sessions') {
                 handleValidatePackageSessions();
+            } elseif ($resource === 'validate-package-capacity') {  
+                handleValidatePackageCapacity();                      
             } else {
                 sendError('Invalid utils POST endpoint', 'NOT_FOUND', 404);
             }
@@ -292,26 +294,20 @@ function handleGetBookingWindow() {
 
 /**
  * ENHANCED: POST /utils/generate-sessions
- * Generate session dates for package bookings with auto-allocation
+ * Generate session dates for package bookings with per-activity capacity
  */
 function handleGeneratePackageSessions() {
     $data = getRequestBody();
     
-    validateRequired($data, ['package_type', 'check_in_date']);
+    validateRequired($data, ['package_type', 'check_in_date', 'people_count']);
     
     $packageType = $data['package_type'];
     $checkInDate = $data['check_in_date'];
-    $activityType = $data['activity_type'] ?? 'surf'; // Default to surf
-    $peopleCount = $data['people_count'] ?? 1;
+    $peopleCount = (int)$data['people_count'];
     
     // Validate package type
     if (!in_array($packageType, ['1_night_1_session', '1_night_2_sessions', '2_nights_3_sessions'])) {
         sendError('Invalid package type', 'VALIDATION_ERROR', 422);
-    }
-    
-    // Validate activity type (packages support surf/sup only)
-    if (!in_array($activityType, ['surf', 'sup'])) {
-        sendError('Invalid activity type for packages. Use surf or sup.', 'VALIDATION_ERROR', 422);
     }
     
     // Validate date format
@@ -319,12 +315,31 @@ function handleGeneratePackageSessions() {
         sendError('Invalid check-in date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
     }
     
-    // IMPORTANT: Check if check-in date is within booking window
+    // Check if check-in date is within booking window
     $bookingWindow = getWeeklyBookingWindow();
     $validDates = array_column($bookingWindow['dates'], 'date');
     
     if (!in_array($checkInDate, $validDates)) {
         sendError('Check-in date is outside booking window', 'VALIDATION_ERROR', 422);
+    }
+    
+    // ✅ NEW: Get default people activities from payload
+    $defaultPeopleActivities = [];
+    if (isset($data['people']) && is_array($data['people'])) {
+        foreach ($data['people'] as $index => $person) {
+            $defaultPeopleActivities[] = [
+                'person_index' => $index,
+                'activity_type' => $person['activity_type'] ?? 'surf'
+            ];
+        }
+    } else {
+        // Fallback: all surf
+        for ($i = 0; $i < $peopleCount; $i++) {
+            $defaultPeopleActivities[] = [
+                'person_index' => $i,
+                'activity_type' => 'surf'
+            ];
+        }
     }
     
     try {
@@ -335,32 +350,68 @@ function handleGeneratePackageSessions() {
         $nights = (strpos($packageType, '2_nights') !== false) ? 2 : 1;
         $checkOutDate = date('Y-m-d', strtotime($checkInDate . ' +' . $nights . ' days'));
         
-        // ENHANCED: Get available slots with auto-allocation logic
+        // ✅ ENHANCED: Get available slots with PER-ACTIVITY capacity
         $slot = new Slot();
         $autoAllocatedCount = 0;
         $failedAllocations = [];
         
         foreach ($sessions as &$session) {
-            $availableSlots = $slot->getAvailableSlots($session['session_date']);
+            $sessionDate = $session['session_date'];
+            $availableSlots = $slot->getAvailableSlots($sessionDate);
             
-            // Format slots for better response with capacity check
+            // Format slots with ACTIVITY-SPECIFIC capacity
             $formattedSlots = [];
             $autoAllocatedSlot = null;
             
             foreach ($availableSlots as $slotData) {
-                $hasCapacity = $slot->hasAvailability($slotData['id'], $session['session_date'], $peopleCount);
+                // ✅ NEW: Get capacity for BOTH surf and SUP
+                $surfCapacity = $slot->getActivityAvailability($slotData['id'], $sessionDate, 'surf');
+                $supCapacity = $slot->getActivityAvailability($slotData['id'], $sessionDate, 'sup');
                 
                 $formattedSlot = [
                     'slot_id' => $slotData['id'],
                     'start_time' => $slotData['start_time'],
                     'end_time' => $slotData['end_time'],
                     'formatted_time' => $slotData['formatted_time'],
-                    'can_book' => $hasCapacity,
-                    'is_auto_allocated' => false
+                    'is_auto_allocated' => false,
+                    'activities' => [  // ✅ NEW: Per-activity capacity
+                        'surf' => [
+                            'max_capacity' => $surfCapacity['max_capacity'],
+                            'booked_count' => $surfCapacity['booked_count'],
+                            'available_spots' => $surfCapacity['available_spots'],
+                            'status' => $surfCapacity['available_spots'] === 0 ? 'full' : 
+                                       ($surfCapacity['available_spots'] < 5 ? 'limited' : 'good')
+                        ],
+                        'sup' => [
+                            'max_capacity' => $supCapacity['max_capacity'],
+                            'booked_count' => $supCapacity['booked_count'],
+                            'available_spots' => $supCapacity['available_spots'],
+                            'status' => $supCapacity['available_spots'] === 0 ? 'full' : 
+                                       ($supCapacity['available_spots'] < 3 ? 'limited' : 'good')
+                        ]
+                    ]
                 ];
                 
-                // Auto-allocate first available slot if none allocated yet
-                if ($hasCapacity && !$autoAllocatedSlot) {
+                // ✅ NEW: Check if this slot can accommodate ALL people with their activities
+                $canAccommodateAll = true;
+                $activityCounts = [];
+                foreach ($defaultPeopleActivities as $pa) {
+                    $activity = $pa['activity_type'];
+                    if (!isset($activityCounts[$activity])) {
+                        $activityCounts[$activity] = 0;
+                    }
+                    $activityCounts[$activity]++;
+                }
+                
+                foreach ($activityCounts as $activity => $count) {
+                    if ($formattedSlot['activities'][$activity]['available_spots'] < $count) {
+                        $canAccommodateAll = false;
+                        break;
+                    }
+                }
+                
+                // Auto-allocate first slot that can accommodate all
+                if ($canAccommodateAll && !$autoAllocatedSlot) {
                     $autoAllocatedSlot = $formattedSlot;
                     $autoAllocatedSlot['is_auto_allocated'] = true;
                     $autoAllocatedCount++;
@@ -373,6 +424,9 @@ function handleGeneratePackageSessions() {
             $session['slots_count'] = count($formattedSlots);
             $session['auto_allocated_slot'] = $autoAllocatedSlot;
             
+            // ✅ NEW: Set default people activities for this session
+            $session['default_people_activities'] = $defaultPeopleActivities;
+            
             // Mark allocation status
             if ($autoAllocatedSlot) {
                 $session['allocation_status'] = 'allocated';
@@ -381,59 +435,35 @@ function handleGeneratePackageSessions() {
                 $session['allocation_status'] = 'no_capacity';
                 $failedAllocations[] = [
                     'date' => $session['session_date'],
-                    'reason' => 'No slots available with capacity for ' . $peopleCount . ' people'
+                    'reason' => 'No slots available with capacity for requested activities'
                 ];
             }
             
-            // Add day context for better UX
+            // Add day context
             $session['day_context'] = [
                 'is_checkin_day' => $session['session_date'] === $checkInDate,
                 'is_checkout_day' => $session['session_date'] === $checkOutDate,
                 'days_from_checkin' => (strtotime($session['session_date']) - strtotime($checkInDate)) / 86400
             ];
         }
+        
         $canProceedWithBooking = empty($failedAllocations);
-
+        
         $response = [
             'package_type' => $packageType,
-            'activity_type' => $activityType,
             'check_in_date' => $checkInDate,
             'check_out_date' => $checkOutDate,
             'nights_count' => $nights,
             'sessions_count' => count($sessions),
             'sessions' => $sessions,
+            'default_people_activities' => $defaultPeopleActivities,
             'auto_allocation_summary' => [
                 'total_sessions' => count($sessions),
                 'auto_allocated' => $autoAllocatedCount,
                 'failed_allocations' => count($failedAllocations),
-                'can_proceed' => $canProceedWithBooking,
-                'allocation_success_rate' => count($sessions) > 0 ? 
-                    round(($autoAllocatedCount / count($sessions)) * 100, 1) : 0,
-                'message' => $canProceedWithBooking ? 
-                    'All sessions can be auto-allocated. Proceed with booking.' : 
-                    'Some sessions have no availability. Booking will proceed with accommodation only.'
+                'can_proceed' => $canProceedWithBooking
             ],
-            'failed_allocations' => $failedAllocations,
-            'booking_policy' => [
-                'accommodation_guaranteed' => true,
-                'session_allocation' => $canProceedWithBooking ? 'automatic' : 'manual_by_staff',
-                'note' => !$canProceedWithBooking ? 'Sessions will be scheduled by our staff based on availability during your stay' : null
-            ],
-            'booking_summary' => [
-                'total_nights' => $nights,
-                'total_sessions' => count($sessions),
-                'session_dates' => array_column($sessions, 'session_date'),
-                'activity_type' => $activityType
-            ],
-            'recommendations' => $failedAllocations > 0 ? [
-                'Consider selecting different dates with better availability',
-                'Reduce group size if possible',
-                'Contact us for alternative arrangements'
-            ] : [
-                'All sessions can be automatically allocated',
-                'You can change slot times if needed',
-                'Proceed to booking confirmation'
-            ]
+            'failed_allocations' => $failedAllocations
         ];
         
         sendResponse(true, $response);
@@ -769,4 +799,148 @@ function checkAvailabilityWarnings($data, $bookingType) {
     
     return $warnings;
 }
+
+
+/**
+ * ✅ NEW: POST /utils/validate-package-capacity
+ * Validate capacity for all person-session-activity combinations
+ */
+function handleValidatePackageCapacity() {
+    $data = getRequestBody();
+    
+    validateRequired($data, ['sessions']);
+    
+    $sessions = $data['sessions'];
+    $errors = [];
+    $warnings = [];
+    $capacityDetails = [];
+    
+    try {
+        $slot = new Slot();
+        
+        foreach ($sessions as $sessionIndex => $session) {
+            $sessionNumber = $sessionIndex + 1;
+            
+            if (empty($session['session_date'])) {
+                $errors[] = "Session $sessionNumber: Missing session_date";
+                continue;
+            }
+            
+            if (empty($session['slot_id'])) {
+                $errors[] = "Session $sessionNumber: Missing slot_id";
+                continue;
+            }
+            
+            if (empty($session['people_activities']) || !is_array($session['people_activities'])) {
+                $errors[] = "Session $sessionNumber: Missing people_activities array";
+                continue;
+            }
+            
+            // Count people per activity for this session
+            $activityCounts = [];
+            foreach ($session['people_activities'] as $pa) {
+                if (empty($pa['activity_type'])) {
+                    $errors[] = "Session $sessionNumber: Missing activity_type in people_activities";
+                    continue;
+                }
+                
+                $activity = $pa['activity_type'];
+                if (!isset($activityCounts[$activity])) {
+                    $activityCounts[$activity] = 0;
+                }
+                $activityCounts[$activity]++;
+            }
+            
+            // Check capacity for EACH activity
+            $sessionCapacity = [
+                'session_number' => $sessionNumber,
+                'session_date' => $session['session_date'],
+                'slot_id' => $session['slot_id'],
+                'activities' => []
+            ];
+            
+            foreach ($activityCounts as $activityType => $count) {
+                // Validate activity type for packages
+                if (!in_array($activityType, ['surf', 'sup'])) {
+                    $errors[] = "Session $sessionNumber: Invalid activity type '$activityType' (packages support surf/sup only)";
+                    continue;
+                }
+                
+                // Get activity info for capacity limits
+                $activityInfo = getActivityInfo($activityType);
+                
+                // Check if exceeds max capacity per slot
+                if ($count > $activityInfo['default_capacity']) {
+                    $errors[] = "Session $sessionNumber: Cannot book $count people for $activityType. Maximum capacity is {$activityInfo['default_capacity']} per slot.";
+                }
+                
+                // Check actual availability
+                $hasCapacity = $slot->hasActivityAvailability(
+                    $session['slot_id'],
+                    $session['session_date'],
+                    $activityType,
+                    $count
+                );
+                
+                // Get current availability details
+                $availabilityInfo = $slot->getActivityAvailability(
+                    $session['slot_id'],
+                    $session['session_date'],
+                    $activityType
+                );
+                
+                $sessionCapacity['activities'][$activityType] = [
+                    'needed' => $count,
+                    'max_capacity' => $availabilityInfo['max_capacity'],
+                    'currently_booked' => $availabilityInfo['booked_count'],
+                    'available_spots' => $availabilityInfo['available_spots'],
+                    'has_capacity' => $hasCapacity,
+                    'status' => $hasCapacity ? 'available' : 'insufficient'
+                ];
+                
+                if (!$hasCapacity) {
+                    $errors[] = "Session $sessionNumber: Insufficient capacity for $count people doing $activityType. Only {$availabilityInfo['available_spots']} spots available.";
+                }
+                
+                // Add warning if capacity is low
+                if ($hasCapacity && $availabilityInfo['available_spots'] < ($count * 2)) {
+                    $warnings[] = "Session $sessionNumber: Low capacity for $activityType. Only {$availabilityInfo['available_spots']} spots remaining.";
+                }
+            }
+            
+            $capacityDetails[] = $sessionCapacity;
+        }
+        
+        $response = [
+            'capacity_available' => empty($errors),
+            'errors' => $errors,
+            'warnings' => $warnings,
+            'capacity_details' => $capacityDetails,
+            'validation_summary' => [
+                'total_sessions' => count($sessions),
+                'sessions_with_capacity' => count($sessions) - count(array_filter($capacityDetails, function($s) {
+                    return !empty(array_filter($s['activities'], function($a) {
+                        return !$a['has_capacity'];
+                    }));
+                })),
+                'error_count' => count($errors),
+                'warning_count' => count($warnings)
+            ],
+            'next_steps' => empty($errors) ? [
+                'All sessions have sufficient capacity',
+                'Proceed with booking creation'
+            ] : [
+                'Fix capacity issues before proceeding',
+                'Consider selecting different dates or reducing group size',
+                'Some people may need to select different activities'
+            ]
+        ];
+        
+        sendResponse(true, $response);
+        
+    } catch (Exception $e) {
+        sendError('Failed to validate package capacity: ' . $e->getMessage(), 'INTERNAL_ERROR', 500);
+    }
+}
+
 ?>

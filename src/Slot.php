@@ -123,6 +123,37 @@ class Slot {
         $availableSpots = $availability['max_capacity'] - $availability['booked_count'];
         return $availableSpots >= $peopleCount;
     }
+
+    /**
+     * Get activity availability for a specific slot, date, and activity
+     * Returns capacity information for the given activity
+     */
+    public function getActivityAvailability($slotId, $date, $activityType) {
+        $availability = $this->db->fetch(
+            "SELECT sa.max_capacity, COALESCE(saa.booked_count, 0) as booked_count,
+                    (sa.max_capacity - COALESCE(saa.booked_count, 0)) as available_spots
+            FROM slot_activities sa
+            LEFT JOIN slot_activity_availability saa ON sa.slot_id = saa.slot_id 
+                AND saa.booking_date = ? AND saa.activity_type = ?
+            WHERE sa.slot_id = ? AND sa.activity_type = ?",
+            [$date, $activityType, $slotId, $activityType]
+        );
+        
+        if (!$availability) {
+            // Return default structure if activity not configured for this slot
+            return [
+                'max_capacity' => 0,
+                'booked_count' => 0,
+                'available_spots' => 0
+            ];
+        }
+        
+        return [
+            'max_capacity' => (int)$availability['max_capacity'],
+            'booked_count' => (int)$availability['booked_count'],
+            'available_spots' => (int)$availability['available_spots']
+        ];
+    }
     
     /**
      * LEGACY METHOD: Check if slot has availability (for package bookings)

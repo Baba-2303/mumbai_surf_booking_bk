@@ -178,37 +178,34 @@ function handleCreateActivityBooking($booking) {
 }
 
 /**
- * ENHANCED: POST /bookings/package
- * ✅ FIX: Added session date validation
- * ✅ FIX: Added duplicate session detection
- * ✅ FIX: Added booking window validation
+ * ✅ ENHANCED: POST /bookings/package
+ * Now supports per-person per-session activity selection
  */
 function handleCreatePackageBooking($booking) {
     $data = getRequestBody();
     
     validateRequired($data, [
         'customer_name', 'customer_email', 'customer_phone',
-        'package_type', 'accommodation_type', 'service_type',
+        'package_type', 'accommodation_type',
         'check_in_date', 'people', 'sessions'
     ]);
     
+    // Validate package type
     if (!in_array($data['package_type'], ['1_night_1_session', '1_night_2_sessions', '2_nights_3_sessions'])) {
         sendError('Invalid package type', 'VALIDATION_ERROR', 422);
     }
     
+    // Validate accommodation type
     if (!in_array($data['accommodation_type'], ['tent', 'dorm', 'cottage'])) {
         sendError('Invalid accommodation type', 'VALIDATION_ERROR', 422);
     }
     
-    if (!in_array($data['service_type'], ['surf', 'sup'])) {
-        sendError('Service type must be either "surf" or "sup"', 'VALIDATION_ERROR', 422);
-    }
-    
+    // Validate check-in date format
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', $data['check_in_date']) || !strtotime($data['check_in_date'])) {
         sendError('Invalid check-in date format. Use YYYY-MM-DD', 'VALIDATION_ERROR', 422);
     }
     
-    // ✅ NEW: Validate booking window for check-in
+    // Validate booking window for check-in
     $bookingWindow = getWeeklyBookingWindow();
     $validDates = array_column($bookingWindow['dates'], 'date');
     
@@ -216,15 +213,17 @@ function handleCreatePackageBooking($booking) {
         sendError('Check-in date is outside booking window', 'INVALID_DATE', 422);
     }
     
-    // ✅ NEW: Prevent past dates
+    // Prevent past dates
     if (strtotime($data['check_in_date']) < strtotime(date('Y-m-d'))) {
         sendError('Cannot book for past dates', 'INVALID_DATE', 422);
     }
     
+    // Calculate check-out date
     $nights = (strpos($data['package_type'], '2_nights') !== false) ? 2 : 1;
     $checkOutDate = date('Y-m-d', strtotime($data['check_in_date'] . ' +' . $nights . ' days'));
     $data['check_out_date'] = $checkOutDate;
     
+    // Validate people array
     if (!is_array($data['people']) || empty($data['people'])) {
         sendError('At least one person is required', 'VALIDATION_ERROR', 422);
     }
@@ -233,6 +232,7 @@ function handleCreatePackageBooking($booking) {
         sendError('Maximum 40 people allowed per booking', 'VALIDATION_ERROR', 422);
     }
     
+    // ✅ NEW: Validate each person has activity_type
     foreach ($data['people'] as $index => $person) {
         if (empty($person['name']) || empty($person['age'])) {
             sendError("Name and age required for person " . ($index + 1), 'VALIDATION_ERROR', 422);
@@ -241,37 +241,93 @@ function handleCreatePackageBooking($booking) {
         if (!is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
             sendError("Age must be between 5 and 100 for person " . ($index + 1), 'VALIDATION_ERROR', 422);
         }
+        
+        // ✅ NEW: Validate activity_type
+        if (empty($person['activity_type']) || !in_array($person['activity_type'], ['surf', 'sup'])) {
+            sendError(
+                "Valid activity selection (surf or sup) is required for person " . ($index + 1),
+                'VALIDATION_ERROR',
+                422
+            );
+        }
     }
     
+    // Validate sessions array
     if (!is_array($data['sessions']) || empty($data['sessions'])) {
         sendError('Session information is required', 'VALIDATION_ERROR', 422);
     }
     
+    // Validate session count
+    $expectedSessions = 1;
+    if (strpos($data['package_type'], '2_sessions') !== false) $expectedSessions = 2;
+    if (strpos($data['package_type'], '3_sessions') !== false) $expectedSessions = 3;
+    
+    if (count($data['sessions']) !== $expectedSessions) {
+        sendError("Package requires exactly $expectedSessions sessions", 'VALIDATION_ERROR', 422);
+    }
+    
+    // ✅ NEW: Validate each session with people_activities
+    $peopleCount = count($data['people']);
     foreach ($data['sessions'] as $index => $session) {
+        $sessionNum = $index + 1;
+        
         if (empty($session['session_date']) || !strtotime($session['session_date'])) {
-            sendError("Valid session date is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
+            sendError("Valid session date is required for session $sessionNum", 'VALIDATION_ERROR', 422);
         }
         
-        // ✅ NEW: Validate each session date is in booking window
         if (!in_array($session['session_date'], $validDates)) {
             sendError(
-                "Session " . ($index + 1) . " date ({$session['session_date']}) is outside booking window",
+                "Session $sessionNum date ({$session['session_date']}) is outside booking window",
                 'INVALID_DATE',
                 422
             );
         }
         
-        // ✅ NEW: Prevent past session dates
         if (strtotime($session['session_date']) < strtotime(date('Y-m-d'))) {
-            sendError("Cannot book sessions for past dates (session " . ($index + 1) . ")", 'INVALID_DATE', 422);
+            sendError("Cannot book sessions for past dates (session $sessionNum)", 'INVALID_DATE', 422);
         }
         
         if (empty($session['slot_id']) || !is_numeric($session['slot_id'])) {
-            sendError("Valid slot selection is required for session " . ($index + 1), 'VALIDATION_ERROR', 422);
+            sendError("Valid slot selection is required for session $sessionNum", 'VALIDATION_ERROR', 422);
+        }
+        
+        // ✅ NEW: Validate people_activities array
+        if (empty($session['people_activities']) || !is_array($session['people_activities'])) {
+            sendError("Missing people_activities for session $sessionNum", 'VALIDATION_ERROR', 422);
+        }
+        
+        if (count($session['people_activities']) !== $peopleCount) {
+            sendError(
+                "Session $sessionNum: people_activities count must match total people",
+                'VALIDATION_ERROR',
+                422
+            );
+        }
+        
+        // ✅ NEW: Validate each person_activity
+        $seenIndices = [];
+        foreach ($session['people_activities'] as $pa) {
+            if (!isset($pa['person_index']) || !is_numeric($pa['person_index'])) {
+                sendError("Session $sessionNum: Invalid person_index in people_activities", 'VALIDATION_ERROR', 422);
+            }
+            
+            $personIndex = (int)$pa['person_index'];
+            if ($personIndex < 0 || $personIndex >= $peopleCount) {
+                sendError("Session $sessionNum: person_index $personIndex out of range", 'VALIDATION_ERROR', 422);
+            }
+            
+            if (in_array($personIndex, $seenIndices)) {
+                sendError("Session $sessionNum: Duplicate person_index $personIndex", 'VALIDATION_ERROR', 422);
+            }
+            $seenIndices[] = $personIndex;
+            
+            if (empty($pa['activity_type']) || !in_array($pa['activity_type'], ['surf', 'sup'])) {
+                sendError("Session $sessionNum: Invalid activity_type for person $personIndex", 'VALIDATION_ERROR', 422);
+            }
         }
     }
     
-    // ✅ CRITICAL FIX: Validate session dates match package schedule
+    // Validate session date sequence
     $expectedSessionDates = [];
     $checkInDate = new DateTime($data['check_in_date']);
     
@@ -279,13 +335,11 @@ function handleCreatePackageBooking($booking) {
         $sessionDate = clone $checkInDate;
         $sessionDate->modify('+1 day');
         $expectedSessionDates[] = $sessionDate->format('Y-m-d');
-        
     } elseif ($data['package_type'] === '1_night_2_sessions') {
         $expectedSessionDates[] = $checkInDate->format('Y-m-d');
         $sessionDate = clone $checkInDate;
         $sessionDate->modify('+1 day');
         $expectedSessionDates[] = $sessionDate->format('Y-m-d');
-        
     } elseif ($data['package_type'] === '2_nights_3_sessions') {
         $expectedSessionDates[] = $checkInDate->format('Y-m-d');
         $sessionDate = clone $checkInDate;
@@ -297,13 +351,9 @@ function handleCreatePackageBooking($booking) {
     
     $actualSessionDates = array_column($data['sessions'], 'session_date');
     
-    // ✅ NEW: Check for duplicate session dates
+    // Check for duplicate session dates
     if (count($actualSessionDates) !== count(array_unique($actualSessionDates))) {
-        sendError(
-            'Cannot book multiple sessions on the same date',
-            'DUPLICATE_SESSION_DATE',
-            422
-        );
+        sendError('Cannot book multiple sessions on the same date', 'DUPLICATE_SESSION_DATE', 422);
     }
     
     $sortedActualDates = $actualSessionDates;
@@ -318,25 +368,7 @@ function handleCreatePackageBooking($booking) {
     }
     
     try {
-        $slot = new Slot();
-        
-        // Validate all session slots
-        foreach ($data['sessions'] as $session) {
-            // ✅ FIX: Validate slot exists for date
-            $slotValidation = $slot->validateSlotForDate($session['slot_id'], $session['session_date'], $data['service_type']);
-            if (!$slotValidation) {
-                sendError(
-                    "Invalid slot {$session['slot_id']} for session on {$session['session_date']}",
-                    'INVALID_SLOT',
-                    422
-                );
-            }
-            
-            if (!$slot->hasAvailability($session['slot_id'], $session['session_date'], count($data['people']))) {
-                sendError('Session slot on ' . $session['session_date'] . ' is no longer available', 'SLOT_UNAVAILABLE', 409);
-            }
-        }
-        
+        // ✅ All validation passed - create booking
         $bookingId = $booking->createPackageBooking($data);
         $bookingData = $booking->getById($bookingId);
         

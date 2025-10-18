@@ -10,7 +10,7 @@ function handleActivitiesEndpoint($method, $resource, $id) {
             if (empty($resource)) {
                 handleGetActivityTypes();
             } elseif ($resource === 'slots') {
-                handleGetActivitySlots();
+                handleGetActivitySlots2();
             } else {
                 sendError('Invalid activities endpoint', 'NOT_FOUND', 404);
             }
@@ -56,7 +56,7 @@ function handleGetActivityTypes() {
  * GET /activities/slots?date=2025-09-28&activity=surf&people=3
  * Get activity-specific slot availability
  */
-function handleGetActivitySlots() {
+function handleGetActivitySlots2() {
     $date = $_GET['date'] ?? '';
     $activityType = $_GET['activity'] ?? '';
     $people = (int)($_GET['people'] ?? 1);

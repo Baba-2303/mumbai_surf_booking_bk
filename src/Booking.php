@@ -138,7 +138,10 @@ class Booking {
     }
     
     /**
-     * ENHANCED: Create Package Booking with auto-allocation
+     * ENHANCED: Create Package Booking
+     * ✅ Supports per-person per-session activity selection
+     * ✅ Maintains auto-allocation for missing slot IDs
+     * ✅ Reserves capacity for EACH activity in EACH session
      */
     public function createPackageBooking($bookingData) {
         if ($this->db->hasActiveTransaction()) {
@@ -157,7 +160,7 @@ class Booking {
             $nights = (strpos($bookingData['package_type'], '2_nights') !== false) ? 2 : 1;
             $bookingData['check_out_date'] = date('Y-m-d', strtotime($bookingData['check_in_date'] . ' +' . $nights . ' days'));
             
-            // ENHANCED: Auto-allocation logic for missing slot IDs
+            // ✅ ENHANCED: Auto-allocation logic for missing slot IDs
             $autoAllocatedSessions = [];
             foreach ($bookingData['sessions'] as &$session) {
                 if (empty($session['slot_id'])) {
@@ -196,21 +199,13 @@ class Booking {
             );
             $pricing = calculateTotalAmount($packagePrice);
             
-            // Check all session slots availability (after auto-allocation)
-            foreach ($bookingData['sessions'] as $session) {
-                if (!$this->slot->hasAvailability(
-                    $session['slot_id'],
-                    $session['session_date'],
-                    $peopleCount
-                )) {
-                    throw new Exception('Session slot on ' . $session['session_date'] . ' is no longer available');
-                }
-            }
+            // ✅ NEW: Validate capacity for ALL person-session-activity combinations
+            $this->validatePackageCapacity($bookingData['sessions'], $peopleCount);
             
             // Create main booking record
             $bookingId = $this->db->insert(
                 "INSERT INTO bookings (customer_id, booking_type, total_people, base_amount, gst_amount, total_amount, notes)
-                 VALUES (?, 'package', ?, ?, ?, ?, ?)",
+                VALUES (?, 'package', ?, ?, ?, ?, ?)",
                 [
                     $customerId,
                     $peopleCount,
@@ -222,15 +217,28 @@ class Booking {
                 ]
             );
             
+            // ✅ NEW: Determine primary activity (most common across all sessions)
+            $allActivities = [];
+            foreach ($bookingData['sessions'] as $session) {
+                if (isset($session['people_activities'])) {
+                    foreach ($session['people_activities'] as $pa) {
+                        $allActivities[] = $pa['activity_type'];
+                    }
+                }
+            }
+            $activityCounts = array_count_values($allActivities);
+            arsort($activityCounts);
+            $primaryActivity = key($activityCounts) ?: 'surf';
+            
             // Create package specific record
             $packageBookingId = $this->db->insert(
                 "INSERT INTO package_bookings (booking_id, package_type, accommodation_type, service_type, check_in_date, check_out_date)
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                VALUES (?, ?, ?, ?, ?, ?)",
                 [
                     $bookingId,
                     $bookingData['package_type'],
                     $bookingData['accommodation_type'],
-                    $bookingData['service_type'],
+                    $primaryActivity, // Primary activity for backward compatibility
                     $bookingData['check_in_date'],
                     $bookingData['check_out_date']
                 ]
@@ -240,21 +248,55 @@ class Booking {
             foreach ($bookingData['sessions'] as $index => $session) {
                 $this->db->insert(
                     "INSERT INTO package_sessions (package_booking_id, session_date, slot_id, session_number)
-                     VALUES (?, ?, ?, ?)",
+                    VALUES (?, ?, ?, ?)",
                     [$packageBookingId, $session['session_date'], $session['slot_id'], $index + 1]
                 );
             }
             
-            // Add people to booking
-            foreach ($bookingData['people'] as $person) {
-                $this->db->insert(
-                    "INSERT INTO booking_people (booking_id, name, age) VALUES (?, ?, ?)",
-                    [$bookingId, $person['name'], $person['age']]
+            // ✅ NEW: Add people to booking WITH activity_type
+            $bookingPeopleIds = [];
+            foreach ($bookingData['people'] as $index => $person) {
+                $personId = $this->db->insert(
+                    "INSERT INTO booking_people (booking_id, name, age, activity_type) VALUES (?, ?, ?, ?)",
+                    [$bookingId, $person['name'], $person['age'], $person['activity_type']]
                 );
+                $bookingPeopleIds[$index] = $personId;
             }
             
-            // Reserve all session slots using legacy method
-            $this->reservePackageSlotsWithinTransaction($bookingData['sessions'], $peopleCount);
+            // ✅ NEW: Add package_person_sessions for each person-session-activity combination
+            foreach ($bookingData['sessions'] as $sessionIndex => $session) {
+                $sessionNumber = $sessionIndex + 1;
+                
+                if (!isset($session['people_activities']) || empty($session['people_activities'])) {
+                    throw new Exception("Missing people_activities for session $sessionNumber");
+                }
+                
+                foreach ($session['people_activities'] as $personActivity) {
+                    $personIndex = $personActivity['person_index'];
+                    $activityType = $personActivity['activity_type'];
+                    
+                    if (!isset($bookingPeopleIds[$personIndex])) {
+                        throw new Exception("Invalid person_index: $personIndex");
+                    }
+                    
+                    $this->db->insert(
+                        "INSERT INTO package_person_sessions 
+                        (package_booking_id, booking_person_id, session_number, session_date, slot_id, activity_type)
+                        VALUES (?, ?, ?, ?, ?, ?)",
+                        [
+                            $packageBookingId,
+                            $bookingPeopleIds[$personIndex],
+                            $sessionNumber,
+                            $session['session_date'],
+                            $session['slot_id'],
+                            $activityType
+                        ]
+                    );
+                }
+            }
+            
+            // ✅ NEW: Reserve capacity for EACH activity in EACH session
+            $this->reservePackageCapacity($bookingData['sessions']);
             
             $this->db->commit();
             return $bookingId;
@@ -264,42 +306,115 @@ class Booking {
             throw $e;
         }
     }
+
+    /**
+     * ✅ NEW: Validate package capacity for all sessions
+     */
+    private function validatePackageCapacity($sessions, $peopleCount) {
+        foreach ($sessions as $sessionIndex => $session) {
+            $sessionNumber = $sessionIndex + 1;
+            
+            if (!isset($session['people_activities']) || empty($session['people_activities'])) {
+                throw new Exception("Missing people_activities for session $sessionNumber");
+            }
+            
+            // Count people per activity for this session
+            $activityCounts = [];
+            foreach ($session['people_activities'] as $pa) {
+                $activity = $pa['activity_type'];
+                if (!isset($activityCounts[$activity])) {
+                    $activityCounts[$activity] = 0;
+                }
+                $activityCounts[$activity]++;
+            }
+            
+            // Validate total people count matches
+            if (array_sum($activityCounts) !== $peopleCount) {
+                throw new Exception("Session $sessionNumber: people_activities count doesn't match total people");
+            }
+            
+            // Check capacity for EACH activity
+            foreach ($activityCounts as $activityType => $count) {
+                if (!$this->slot->hasActivityAvailability(
+                    $session['slot_id'],
+                    $session['session_date'],
+                    $activityType,
+                    $count
+                )) {
+                    throw new Exception(
+                        "Session $sessionNumber: Insufficient capacity for $count people doing $activityType on {$session['session_date']}"
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * ✅ NEW: Reserve capacity for package sessions
+     */
+    private function reservePackageCapacity($sessions) {
+        foreach ($sessions as $session) {
+            if (!isset($session['people_activities']) || empty($session['people_activities'])) {
+                continue;
+            }
+            
+            // Count people per activity for this session
+            $activityCounts = [];
+            foreach ($session['people_activities'] as $pa) {
+                $activity = $pa['activity_type'];
+                if (!isset($activityCounts[$activity])) {
+                    $activityCounts[$activity] = 0;
+                }
+                $activityCounts[$activity]++;
+            }
+            
+            // Reserve capacity for EACH activity
+            foreach ($activityCounts as $activityType => $count) {
+                $this->slot->reserveActivitySlot(
+                    $session['slot_id'],
+                    $session['session_date'],
+                    $activityType,
+                    $count
+                );
+            }
+        }
+    }
     
     /**
      * Reserve package slots within transaction (uses first available activity)
      */
-    private function reservePackageSlotsWithinTransaction($sessions, $peopleCount) {
-        foreach ($sessions as $session) {
-            $slotId = $session['slot_id'];
-            $date = $session['session_date'];
+    // private function reservePackageSlotsWithinTransaction($sessions, $peopleCount) {
+    //     foreach ($sessions as $session) {
+    //         $slotId = $session['slot_id'];
+    //         $date = $session['session_date'];
             
-            // Find the first available activity with enough capacity
-            $availableActivity = $this->db->fetch(
-                "SELECT sa.activity_type, sa.max_capacity, COALESCE(saa.booked_count, 0) as booked_count,
-                        (sa.max_capacity - COALESCE(saa.booked_count, 0)) as available_spots
-                 FROM slot_activities sa
-                 LEFT JOIN slot_activity_availability saa ON sa.slot_id = saa.slot_id 
-                     AND saa.booking_date = ? AND saa.activity_type = sa.activity_type
-                 WHERE sa.slot_id = ?
-                 HAVING available_spots >= ?
-                 ORDER BY available_spots DESC
-                 LIMIT 1",
-                [$date, $slotId, $peopleCount]
-            );
+    //         // Find the first available activity with enough capacity
+    //         $availableActivity = $this->db->fetch(
+    //             "SELECT sa.activity_type, sa.max_capacity, COALESCE(saa.booked_count, 0) as booked_count,
+    //                     (sa.max_capacity - COALESCE(saa.booked_count, 0)) as available_spots
+    //              FROM slot_activities sa
+    //              LEFT JOIN slot_activity_availability saa ON sa.slot_id = saa.slot_id 
+    //                  AND saa.booking_date = ? AND saa.activity_type = sa.activity_type
+    //              WHERE sa.slot_id = ?
+    //              HAVING available_spots >= ?
+    //              ORDER BY available_spots DESC
+    //              LIMIT 1",
+    //             [$date, $slotId, $peopleCount]
+    //         );
             
-            if (!$availableActivity) {
-                throw new Exception("No activity available for slot on $date");
-            }
+    //         if (!$availableActivity) {
+    //             throw new Exception("No activity available for slot on $date");
+    //         }
             
-            // Reserve using the available activity
-            $this->slot->reserveActivitySlot(
-                $slotId,
-                $date,
-                $availableActivity['activity_type'],
-                $peopleCount
-            );
-        }
-    }
+    //         // Reserve using the available activity
+    //         $this->slot->reserveActivitySlot(
+    //             $slotId,
+    //             $date,
+    //             $availableActivity['activity_type'],
+    //             $peopleCount
+    //         );
+    //     }
+    // }
     
     /**
      * Create Stay-only Booking - UNCHANGED
@@ -447,15 +562,42 @@ class Booking {
                 );
                 $sessions = $this->db->fetchAll(
                     "SELECT ps.*, s.start_time, s.end_time
-                     FROM package_sessions ps
-                     JOIN package_bookings pb ON ps.package_booking_id = pb.id
-                     JOIN slots s ON ps.slot_id = s.id
-                     WHERE pb.booking_id = ?
-                     ORDER BY ps.session_number",
+                    FROM package_sessions ps
+                    JOIN package_bookings pb ON ps.package_booking_id = pb.id
+                    JOIN slots s ON ps.slot_id = s.id
+                    WHERE pb.booking_id = ?
+                    ORDER BY ps.session_number",
                     [$id]
                 );
                 $booking['package_details'] = $specific;
                 $booking['sessions'] = $sessions;
+                
+                // ✅ NEW: Get per-person per-session activity breakdown
+                $personSessionActivities = $this->db->fetchAll(
+                    "SELECT pps.*, bp.name, bp.age, s.start_time, s.end_time
+                    FROM package_person_sessions pps
+                    JOIN booking_people bp ON pps.booking_person_id = bp.id
+                    JOIN slots s ON pps.slot_id = s.id
+                    WHERE pps.package_booking_id = ?
+                    ORDER BY pps.session_number, bp.id",
+                    [$specific['id']]
+                );
+                $booking['person_session_activities'] = $personSessionActivities;
+                
+                // ✅ NEW: Get activity breakdown per session
+                $sessionActivityBreakdown = $this->db->fetchAll(
+                    "SELECT 
+                        session_number,
+                        session_date,
+                        activity_type,
+                        COUNT(*) as count
+                    FROM package_person_sessions
+                    WHERE package_booking_id = ?
+                    GROUP BY session_number, session_date, activity_type
+                    ORDER BY session_number, activity_type",
+                    [$specific['id']]
+                );
+                $booking['session_activity_breakdown'] = $sessionActivityBreakdown;
                 break;
                 
             case 'stay_only':
@@ -471,7 +613,7 @@ class Booking {
     }
     
     /**
-     * Cancel booking - UPDATED for activity system
+     * ENHANCED: Cancel booking - Updated for package bookings
      */
     public function cancel($bookingId) {
         $this->db->beginTransaction();
@@ -482,9 +624,9 @@ class Booking {
                 throw new Exception('Booking not found');
             }
             
-            // ✅ MODIFIED: Release capacity for EACH activity
+            // Release capacity based on booking type
             if ($booking['booking_type'] === 'activity') {
-                // Group people by activity
+                // ✅ Existing activity booking cancellation
                 $activityGroups = [];
                 foreach ($booking['people'] as $person) {
                     $activity = $person['activity_type'];
@@ -494,7 +636,6 @@ class Booking {
                     $activityGroups[$activity]++;
                 }
                 
-                // Release capacity for each activity
                 foreach ($activityGroups as $activityType => $count) {
                     $this->slot->releaseActivitySlot(
                         $booking['activity_details']['slot_id'],
@@ -503,13 +644,42 @@ class Booking {
                         $count
                     );
                 }
+                
             } elseif ($booking['booking_type'] === 'package') {
-                // Existing package cancellation logic
-                $slots = [];
-                foreach ($booking['sessions'] as $session) {
-                    $slots[] = ['slot_id' => $session['slot_id'], 'date' => $session['session_date']];
+                // ✅ NEW: Package booking cancellation - release per-session per-activity capacity
+                if (isset($booking['person_session_activities'])) {
+                    // Group by session, slot, activity
+                    $sessionActivities = [];
+                    foreach ($booking['person_session_activities'] as $psa) {
+                        $key = $psa['session_date'] . '|' . $psa['slot_id'] . '|' . $psa['activity_type'];
+                        if (!isset($sessionActivities[$key])) {
+                            $sessionActivities[$key] = [
+                                'session_date' => $psa['session_date'],
+                                'slot_id' => $psa['slot_id'],
+                                'activity_type' => $psa['activity_type'],
+                                'count' => 0
+                            ];
+                        }
+                        $sessionActivities[$key]['count']++;
+                    }
+                    
+                    // Release capacity for each session-activity combination
+                    foreach ($sessionActivities as $sa) {
+                        $this->slot->releaseActivitySlot(
+                            $sa['slot_id'],
+                            $sa['session_date'],
+                            $sa['activity_type'],
+                            $sa['count']
+                        );
+                    }
+                } else {
+                    // ✅ FALLBACK: Use old method if person_session_activities not available
+                    $slots = [];
+                    foreach ($booking['sessions'] as $session) {
+                        $slots[] = ['slot_id' => $session['slot_id'], 'date' => $session['session_date']];
+                    }
+                    $this->slot->releaseSlots($slots, $booking['total_people']);
                 }
-                $this->slot->releaseSlots($slots, $booking['total_people']);
             }
             
             // Update booking status
@@ -596,7 +766,9 @@ class Booking {
     }
     
     /**
-     * Enhanced validation for package booking
+     * ENHANCED: Validation for package booking
+     * ✅ Validates per-person per-session activity selections
+     * ✅ Maintains all existing validation logic
      */
     private function validatePackageBooking($data) {
         $errors = [];
@@ -614,15 +786,14 @@ class Booking {
             $errors[] = 'Phone number is required';
         }
         
-        if (empty($data['service_type']) || !in_array($data['service_type'], ['surf', 'sup'])) {
-            $errors[] = 'Valid service type is required';
-        }
+        // ✅ REMOVED: service_type validation (now per-person)
+        // Package bookings now track activity per person, not at group level
         
         if (empty($data['people']) || !is_array($data['people'])) {
             $errors[] = 'At least one person is required';
         }
         
-        // Validate each person
+        // ✅ ENHANCED: Validate each person WITH activity_type
         if (!empty($data['people'])) {
             foreach ($data['people'] as $i => $person) {
                 if (empty($person['name'])) {
@@ -630,6 +801,10 @@ class Booking {
                 }
                 if (empty($person['age']) || !is_numeric($person['age']) || $person['age'] < 5 || $person['age'] > 100) {
                     $errors[] = "Valid age (5-100) is required for person " . ($i + 1);
+                }
+                // ✅ NEW: Validate activity_type for each person
+                if (empty($person['activity_type']) || !in_array($person['activity_type'], ['surf', 'sup'])) {
+                    $errors[] = "Valid activity selection (surf or sup) is required for person " . ($i + 1);
                 }
             }
         }
@@ -649,7 +824,7 @@ class Booking {
             $errors[] = 'Valid check-in date is required';
         }
         
-        // ENHANCED: Validate sessions array with auto-allocation support
+        // ✅ ENHANCED: Validate sessions array with people_activities
         if (empty($data['sessions']) || !is_array($data['sessions'])) {
             $errors[] = 'Session information is required';
         } else {
@@ -662,13 +837,67 @@ class Booking {
                 $errors[] = "Package requires exactly $expectedSessions sessions, got " . count($data['sessions']);
             }
             
+            $peopleCount = count($data['people']);
+            
             foreach ($data['sessions'] as $i => $session) {
+                $sessionNum = $i + 1;
+                
+                // Validate session date
                 if (empty($session['session_date']) || !strtotime($session['session_date'])) {
-                    $errors[] = "Valid session date is required for session " . ($i + 1);
+                    $errors[] = "Valid session date is required for session $sessionNum";
                 }
-                // Note: slot_id is optional now due to auto-allocation
+                
+                // Validate slot_id (can be empty for auto-allocation)
                 if (!empty($session['slot_id']) && !is_numeric($session['slot_id'])) {
-                    $errors[] = "Invalid slot selection for session " . ($i + 1);
+                    $errors[] = "Invalid slot selection for session $sessionNum";
+                }
+                
+                // ✅ NEW: Validate people_activities array
+                if (empty($session['people_activities']) || !is_array($session['people_activities'])) {
+                    $errors[] = "Missing people_activities for session $sessionNum";
+                    continue; // Skip further validation for this session
+                }
+                
+                // Validate people_activities count matches total people
+                if (count($session['people_activities']) !== $peopleCount) {
+                    $errors[] = "Session $sessionNum: people_activities count (" . count($session['people_activities']) . ") doesn't match total people ($peopleCount)";
+                }
+                
+                // Validate each person_activity
+                $seenPersonIndices = [];
+                foreach ($session['people_activities'] as $j => $pa) {
+                    // Validate person_index
+                    if (!isset($pa['person_index']) || !is_numeric($pa['person_index'])) {
+                        $errors[] = "Session $sessionNum: Missing or invalid person_index for activity " . ($j + 1);
+                        continue;
+                    }
+                    
+                    $personIndex = (int)$pa['person_index'];
+                    
+                    // Check person_index is within valid range
+                    if ($personIndex < 0 || $personIndex >= $peopleCount) {
+                        $errors[] = "Session $sessionNum: Invalid person_index $personIndex (must be 0-" . ($peopleCount - 1) . ")";
+                    }
+                    
+                    // Check for duplicate person_index in same session
+                    if (in_array($personIndex, $seenPersonIndices)) {
+                        $errors[] = "Session $sessionNum: Duplicate person_index $personIndex";
+                    }
+                    $seenPersonIndices[] = $personIndex;
+                    
+                    // Validate activity_type
+                    if (empty($pa['activity_type']) || !in_array($pa['activity_type'], ['surf', 'sup'])) {
+                        $errors[] = "Session $sessionNum: Invalid activity_type for person " . ($personIndex + 1);
+                    }
+                }
+                
+                // Ensure all people are accounted for in this session
+                if (count($seenPersonIndices) === $peopleCount) {
+                    $expectedIndices = range(0, $peopleCount - 1);
+                    $missingIndices = array_diff($expectedIndices, $seenPersonIndices);
+                    if (!empty($missingIndices)) {
+                        $errors[] = "Session $sessionNum: Missing activity selection for person(s): " . implode(', ', array_map(function($i) { return $i + 1; }, $missingIndices));
+                    }
                 }
             }
         }
