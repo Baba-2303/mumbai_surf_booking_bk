@@ -1,0 +1,532 @@
+-- ============================================================
+-- MUMBAI SURF CLUB - COMPLETE DATABASE SCHEMA
+-- ============================================================
+-- Supports: Activity, Package, and Stay-Only Bookings
+-- Admin Panel: Full CRUD for Activities, Slots, Accommodations
+-- ============================================================
+
+-- ============================================================
+-- 1. USERS & AUTHENTICATION
+-- ============================================================
+
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    username VARCHAR(100) UNIQUE NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL DEFAULT 'admin', -- admin, staff
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_users_email ON users(email);
+CREATE INDEX idx_users_username ON users(username);
+
+-- ============================================================
+-- 2. ACTIVITIES
+-- ============================================================
+
+CREATE TABLE activities (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL, -- "Surfing", "Stand Up Paddle"
+    code VARCHAR(50) UNIQUE NOT NULL, -- "surf", "sup", "kayak"
+    description TEXT,
+    icon_emoji VARCHAR(10), -- "🏄", "🚣"
+    default_capacity INT NOT NULL DEFAULT 40, -- Default max people per slot
+    price_per_person DECIMAL(10,2) NOT NULL, -- Base price (e.g., 1700)
+    duration_minutes INT DEFAULT 90, -- Session duration
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_activities_code ON activities(code);
+CREATE INDEX idx_activities_is_active ON activities(is_active);
+
+-- ============================================================
+-- 3. ACCOMMODATION TYPES
+-- ============================================================
+
+CREATE TABLE accommodation_types (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(50) NOT NULL, -- "Tent", "Dorm", "Cottage"
+    code VARCHAR(20) UNIQUE NOT NULL, -- "tent", "dorm", "cottage"
+    total_capacity INT NOT NULL, -- 20 tents, 40 beds, 5 cottages
+    capacity_unit VARCHAR(20) NOT NULL, -- "person", "bed", "cottage"
+    max_people_per_unit INT NOT NULL, -- 1 for tent/dorm, 4 for cottage
+    base_price_per_unit DECIMAL(10,2) NOT NULL, -- Price per night per unit
+    meal_price_per_person DECIMAL(10,2) DEFAULT 500, -- Optional meal add-on
+    description TEXT,
+    amenities TEXT, -- JSON or comma-separated
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_accommodation_types_code ON accommodation_types(code);
+
+-- ============================================================
+-- 4. PACKAGE TYPES
+-- ============================================================
+
+CREATE TABLE package_types (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL, -- "1 Night 2 Sessions"
+    code VARCHAR(20) UNIQUE NOT NULL, -- "1N2S", "2N3S"
+    nights INT NOT NULL, -- 1, 2
+    sessions INT NOT NULL, -- 1, 2, 3
+    description TEXT,
+    is_popular BOOLEAN DEFAULT FALSE,
+    display_order INT DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_package_types_code ON package_types(code);
+
+-- ============================================================
+-- 5. ACTIVITY SLOTS
+-- ============================================================
+
+CREATE TABLE activity_slots (
+    id BIGSERIAL PRIMARY KEY,
+    activity_id BIGINT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+    slot_date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    max_capacity INT NOT NULL, -- Can override activity default
+    current_bookings INT DEFAULT 0, -- Denormalized for performance
+    is_active BOOLEAN DEFAULT TRUE,
+    notes TEXT, -- Admin notes
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_time_order CHECK (end_time > start_time),
+    CONSTRAINT chk_capacity CHECK (max_capacity > 0),
+    CONSTRAINT chk_current_bookings CHECK (current_bookings >= 0)
+);
+
+CREATE INDEX idx_activity_slots_activity_date ON activity_slots(activity_id, slot_date);
+CREATE INDEX idx_activity_slots_date ON activity_slots(slot_date);
+CREATE INDEX idx_activity_slots_activity_id ON activity_slots(activity_id);
+
+-- ============================================================
+-- 6. CUSTOMERS
+-- ============================================================
+
+CREATE TABLE customers (
+    id BIGSERIAL PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(20) NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_customers_email ON customers(email);
+CREATE INDEX idx_customers_phone ON customers(phone);
+
+-- ============================================================
+-- 7. BOOKINGS (Main Booking Record)
+-- ============================================================
+
+CREATE TABLE bookings (
+    id BIGSERIAL PRIMARY KEY,
+    booking_reference VARCHAR(50) UNIQUE NOT NULL, -- "SURF-12345-20251020"
+    booking_type VARCHAR(20) NOT NULL, -- "activity", "package", "stay_only"
+    customer_id BIGINT NOT NULL REFERENCES customers(id),
+    
+    -- Common fields
+    total_people INT NOT NULL,
+    booking_status VARCHAR(20) NOT NULL DEFAULT 'confirmed', -- confirmed, cancelled
+    payment_status VARCHAR(20) NOT NULL DEFAULT 'pending', -- pending, paid, refunded
+    
+    -- Pricing
+    subtotal_amount DECIMAL(10,2) NOT NULL,
+    gst_amount DECIMAL(10,2) NOT NULL,
+    total_amount DECIMAL(10,2) NOT NULL,
+    
+    -- Payment
+    razorpay_order_id VARCHAR(100),
+    razorpay_payment_id VARCHAR(100),
+    paid_at TIMESTAMP,
+    
+    -- Cancellation
+    cancelled_at TIMESTAMP,
+    cancellation_reason TEXT,
+    refund_amount DECIMAL(10,2),
+    refunded_at TIMESTAMP,
+    
+    -- Metadata
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_booking_type CHECK (booking_type IN ('activity', 'package', 'stay_only')),
+    CONSTRAINT chk_booking_status CHECK (booking_status IN ('confirmed', 'cancelled')),
+    CONSTRAINT chk_payment_status CHECK (payment_status IN ('pending', 'paid', 'refunded'))
+);
+
+CREATE INDEX idx_bookings_reference ON bookings(booking_reference);
+CREATE INDEX idx_bookings_customer_id ON bookings(customer_id);
+CREATE INDEX idx_bookings_type ON bookings(booking_type);
+CREATE INDEX idx_bookings_status ON bookings(booking_status);
+CREATE INDEX idx_bookings_created_at ON bookings(created_at);
+
+-- ============================================================
+-- 8. ACTIVITY BOOKINGS (Activity-Only Bookings)
+-- ============================================================
+
+CREATE TABLE activity_bookings (
+    id BIGSERIAL PRIMARY KEY,
+    booking_id BIGINT UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    session_date DATE NOT NULL,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_activity_bookings_booking_id ON activity_bookings(booking_id);
+CREATE INDEX idx_activity_bookings_session_date ON activity_bookings(session_date);
+
+-- ============================================================
+-- 9. PACKAGE BOOKINGS (Package Bookings)
+-- ============================================================
+
+CREATE TABLE package_bookings (
+    id BIGSERIAL PRIMARY KEY,
+    booking_id BIGINT UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    package_type_id BIGINT NOT NULL REFERENCES package_types(id),
+    accommodation_type_id BIGINT NOT NULL REFERENCES accommodation_types(id),
+    
+    check_in_date DATE NOT NULL,
+    check_out_date DATE NOT NULL,
+    nights_count INT NOT NULL,
+    units_booked INT NOT NULL, -- Number of tents/beds/cottages
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_checkout_after_checkin CHECK (check_out_date > check_in_date)
+);
+
+CREATE INDEX idx_package_bookings_booking_id ON package_bookings(booking_id);
+CREATE INDEX idx_package_bookings_check_in_date ON package_bookings(check_in_date);
+CREATE INDEX idx_package_bookings_accommodation_type_id ON package_bookings(accommodation_type_id);
+
+-- ============================================================
+-- 10. STAY-ONLY BOOKINGS (Accommodation-Only Bookings)
+-- ============================================================
+
+CREATE TABLE stay_only_bookings (
+    id BIGSERIAL PRIMARY KEY,
+    booking_id BIGINT UNIQUE NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    accommodation_type_id BIGINT NOT NULL REFERENCES accommodation_types(id),
+    
+    check_in_date DATE NOT NULL,
+    check_out_date DATE NOT NULL,
+    nights_count INT NOT NULL,
+    units_booked INT NOT NULL,
+    includes_meals BOOLEAN DEFAULT FALSE,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_stay_checkout_after_checkin CHECK (check_out_date > check_in_date)
+);
+
+CREATE INDEX idx_stay_only_bookings_booking_id ON stay_only_bookings(booking_id);
+CREATE INDEX idx_stay_only_bookings_check_in_date ON stay_only_bookings(check_in_date);
+CREATE INDEX idx_stay_only_bookings_accommodation_type_id ON stay_only_bookings(accommodation_type_id);
+
+-- ============================================================
+-- 11. PEOPLE (Participants in Bookings)
+-- ============================================================
+
+CREATE TABLE booking_people (
+    id BIGSERIAL PRIMARY KEY,
+    booking_id BIGINT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    person_index INT NOT NULL, -- 0-based index (0 = primary booker)
+    full_name VARCHAR(255) NOT NULL,
+    age INT NOT NULL,
+    is_primary BOOLEAN DEFAULT FALSE,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_age CHECK (age >= 5 AND age <= 100),
+    CONSTRAINT uq_booking_person_index UNIQUE (booking_id, person_index)
+);
+
+CREATE INDEX idx_booking_people_booking_id ON booking_people(booking_id);
+
+-- ============================================================
+-- 12. ACTIVITY SESSIONS (For Package Bookings)
+-- ============================================================
+
+CREATE TABLE package_sessions (
+    id BIGSERIAL PRIMARY KEY,
+    package_booking_id BIGINT NOT NULL REFERENCES package_bookings(id) ON DELETE CASCADE,
+    session_number INT NOT NULL, -- 1, 2, 3
+    session_date DATE NOT NULL,
+    is_checked_in BOOLEAN DEFAULT FALSE,
+    checked_in_at TIMESTAMP,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_package_session UNIQUE (package_booking_id, session_number)
+);
+
+CREATE INDEX idx_package_sessions_package_booking_id ON package_sessions(package_booking_id);
+CREATE INDEX idx_package_sessions_session_date ON package_sessions(session_date);
+
+-- ============================================================
+-- 13. SESSION ACTIVITIES (Which activity each person does per session)
+-- ============================================================
+
+CREATE TABLE session_activities (
+    id BIGSERIAL PRIMARY KEY,
+    package_session_id BIGINT NOT NULL REFERENCES package_sessions(id) ON DELETE CASCADE,
+    person_id BIGINT NOT NULL REFERENCES booking_people(id) ON DELETE CASCADE,
+    activity_slot_id BIGINT NOT NULL REFERENCES activity_slots(id),
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT uq_session_person_activity UNIQUE (package_session_id, person_id)
+);
+
+CREATE INDEX idx_session_activities_package_session_id ON session_activities(package_session_id);
+CREATE INDEX idx_session_activities_activity_slot_id ON session_activities(activity_slot_id);
+CREATE INDEX idx_session_activities_person_id ON session_activities(person_id);
+
+-- ============================================================
+-- 14. ACTIVITY SLOT BOOKINGS (Links people to activity slots)
+-- ============================================================
+
+CREATE TABLE activity_slot_bookings (
+    id BIGSERIAL PRIMARY KEY,
+    activity_slot_id BIGINT NOT NULL REFERENCES activity_slots(id) ON DELETE CASCADE,
+    booking_id BIGINT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    person_id BIGINT NOT NULL REFERENCES booking_people(id) ON DELETE CASCADE,
+    booking_type VARCHAR(20) NOT NULL, -- "activity" or "package"
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_slot_booking_type CHECK (booking_type IN ('activity', 'package'))
+);
+
+CREATE INDEX idx_activity_slot_bookings_slot_id ON activity_slot_bookings(activity_slot_id);
+CREATE INDEX idx_activity_slot_bookings_booking_id ON activity_slot_bookings(booking_id);
+
+-- ============================================================
+-- 15. ACCOMMODATION BOOKINGS (Daily Occupancy Tracking)
+-- ============================================================
+
+CREATE TABLE accommodation_bookings (
+    id BIGSERIAL PRIMARY KEY,
+    accommodation_type_id BIGINT NOT NULL REFERENCES accommodation_types(id),
+    booking_id BIGINT NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
+    booking_type VARCHAR(20) NOT NULL, -- "package" or "stay_only"
+    
+    stay_date DATE NOT NULL, -- Each night gets a record
+    units_occupied INT NOT NULL, -- Tents/beds/cottages used
+    people_count INT NOT NULL,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    
+    CONSTRAINT chk_accommodation_booking_type CHECK (booking_type IN ('package', 'stay_only'))
+);
+
+CREATE INDEX idx_accommodation_bookings_accommodation_type_date ON accommodation_bookings(accommodation_type_id, stay_date);
+CREATE INDEX idx_accommodation_bookings_booking_id ON accommodation_bookings(booking_id);
+CREATE INDEX idx_accommodation_bookings_stay_date ON accommodation_bookings(stay_date);
+
+-- ============================================================
+-- 16. BOOKING WINDOW CONFIGURATION
+-- ============================================================
+
+CREATE TABLE booking_windows (
+    id BIGSERIAL PRIMARY KEY,
+    window_type VARCHAR(50) NOT NULL, -- "weekly", "rolling_30_days"
+    applies_to VARCHAR(50) NOT NULL, -- "activity_package", "stay_only"
+    is_active BOOLEAN DEFAULT TRUE,
+    config JSONB, -- Store flexible configuration
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 17. SYSTEM SETTINGS
+-- ============================================================
+
+CREATE TABLE system_settings (
+    id BIGSERIAL PRIMARY KEY,
+    setting_key VARCHAR(100) UNIQUE NOT NULL,
+    setting_value TEXT,
+    setting_type VARCHAR(50), -- "string", "number", "boolean", "json"
+    description TEXT,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================
+-- 18. AUDIT LOG
+-- ============================================================
+
+CREATE TABLE audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id),
+    action VARCHAR(100) NOT NULL, -- "create_booking", "cancel_booking", "update_slot"
+    entity_type VARCHAR(50) NOT NULL, -- "booking", "slot", "activity"
+    entity_id BIGINT,
+    old_values JSONB,
+    new_values JSONB,
+    ip_address VARCHAR(50),
+    user_agent TEXT,
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_audit_logs_user_id ON audit_logs(user_id);
+CREATE INDEX idx_audit_logs_entity ON audit_logs(entity_type, entity_id);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs(created_at);
+
+-- ============================================================
+-- TRIGGERS FOR UPDATED_AT
+-- ============================================================
+
+CREATE OR REPLACE FUNCTION update_updated_at_column()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_activities_updated_at BEFORE UPDATE ON activities
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_accommodation_types_updated_at BEFORE UPDATE ON accommodation_types
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_activity_slots_updated_at BEFORE UPDATE ON activity_slots
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_bookings_updated_at BEFORE UPDATE ON bookings
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER update_package_sessions_updated_at BEFORE UPDATE ON package_sessions
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- VIEWS FOR COMMON QUERIES
+-- ============================================================
+
+-- View: All bookings with customer info
+CREATE VIEW v_bookings_with_customer AS
+SELECT 
+    b.id,
+    b.booking_reference,
+    b.booking_type,
+    b.booking_status,
+    b.payment_status,
+    b.total_people,
+    b.total_amount,
+    b.created_at,
+    c.full_name AS customer_name,
+    c.email AS customer_email,
+    c.phone AS customer_phone
+FROM bookings b
+JOIN customers c ON b.customer_id = c.id;
+
+-- View: Activity slot availability
+CREATE VIEW v_activity_slot_availability AS
+SELECT 
+    s.id AS slot_id,
+    s.slot_date,
+    s.start_time,
+    s.end_time,
+    a.name AS activity_name,
+    a.code AS activity_code,
+    s.max_capacity,
+    s.current_bookings,
+    (s.max_capacity - s.current_bookings) AS available_spots,
+    ROUND((s.current_bookings::DECIMAL / s.max_capacity * 100), 2) AS utilization_percent
+FROM activity_slots s
+JOIN activities a ON s.activity_id = a.id
+WHERE s.is_active = TRUE;
+
+-- View: Accommodation availability by date
+CREATE VIEW v_accommodation_availability AS
+SELECT 
+    at.code AS accommodation_code,
+    at.name AS accommodation_name,
+    ab.stay_date,
+    at.total_capacity,
+    COALESCE(SUM(ab.units_occupied), 0) AS units_booked,
+    (at.total_capacity - COALESCE(SUM(ab.units_occupied), 0)) AS units_available
+FROM accommodation_types at
+CROSS JOIN generate_series(
+    CURRENT_DATE,
+    CURRENT_DATE + INTERVAL '30 days',
+    INTERVAL '1 day'
+) AS dates(stay_date)
+LEFT JOIN accommodation_bookings ab ON 
+    at.id = ab.accommodation_type_id AND 
+    ab.stay_date = dates.stay_date
+WHERE at.is_active = TRUE
+GROUP BY at.id, at.code, at.name, at.total_capacity, ab.stay_date;
+
+-- ============================================================
+-- SAMPLE DATA
+-- ============================================================
+
+-- Insert default admin user (password should be hashed in real implementation)
+INSERT INTO users (username, email, password_hash, role) VALUES
+('admin', 'admin@mumbaisurfclub.com', '$2a$12$Xjc3T8hNd1e4x6MSsm0FaeZ4FHqISHR/u67ktSIZVWuTtRtd4w00e', 'admin');
+
+-- Insert activities
+INSERT INTO activities (name, code, description, icon_emoji, default_capacity, price_per_person, duration_minutes) VALUES
+('Surfing', 'surf', 'Learn to surf with professional instructors', '🏄', 40, 1700, 90),
+('Stand Up Paddle', 'sup', 'Stand Up Paddleboarding experience', '🏄‍♂️', 12, 1700, 90),
+('Kayaking', 'kayak', 'Kayaking adventure', '🚣', 2, 1700, 90);
+
+-- Insert accommodation types
+INSERT INTO accommodation_types (name, code, total_capacity, capacity_unit, max_people_per_unit, base_price_per_unit, meal_price_per_person, description) VALUES
+('Tent', 'tent', 20, 'person', 1, 1000, 500, 'Basic outdoor camping'),
+('Dorm', 'dorm', 40, 'bed', 1, 1200, 500, 'Shared AC room with fresh bedding'),
+('Cottage', 'cottage', 5, 'cottage', 4, 6000, 500, 'Private cottage for groups (1-4 people)');
+
+-- Insert package types
+INSERT INTO package_types (name, code, nights, sessions, is_popular, display_order) VALUES
+('1 Night 1 Session', '1N1S', 1, 1, FALSE, 1),
+('1 Night 2 Sessions', '1N2S', 1, 2, TRUE, 2),
+('2 Nights 3 Sessions', '2N3S', 2, 3, FALSE, 3);
+
+-- Insert booking windows
+INSERT INTO booking_windows (window_type, applies_to, config) VALUES
+('weekly', 'activity_package', '{"start_day": "tuesday", "duration_days": 7}'),
+('rolling_30_days', 'stay_only', '{"duration_days": 30}');
+
+-- ============================================================
+-- COMMENTS
+-- ============================================================
+
+COMMENT ON TABLE bookings IS 'Main booking table - all booking types';
+COMMENT ON TABLE activity_bookings IS 'Activity-only bookings (no accommodation)';
+COMMENT ON TABLE package_bookings IS 'Package bookings (accommodation + sessions)';
+COMMENT ON TABLE stay_only_bookings IS 'Accommodation-only bookings';
+COMMENT ON TABLE activity_slot_bookings IS 'Links people to specific activity slots';
+COMMENT ON TABLE accommodation_bookings IS 'Daily accommodation occupancy tracking';
+COMMENT ON TABLE package_sessions IS 'Individual sessions within package bookings';
+COMMENT ON TABLE session_activities IS 'Per-person activity selection for each session';
+
+-- ============================================================
+-- END OF SCHEMA
+-- ============================================================

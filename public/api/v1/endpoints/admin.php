@@ -96,18 +96,11 @@ function handleAdminLogin() {
     
     validateRequired($data, ['username', 'password']);
 
-    // ADD RATE LIMITING HERE
-    $ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-    if (!checkLoginRateLimit($ip)) {
-        sendError('Too many login attempts. Please try again in 15 minutes.', 'RATE_LIMITED', 429);
-    }
     
     try {
         $loginResult = adminLogin($data['username'], $data['password']);
         
         if (!$loginResult) {
-            // Log failed attempt
-            logFailedLogin($ip, $data['username']);
             sendError('Invalid username or password', 'UNAUTHORIZED', 401);
         }
         
@@ -116,43 +109,6 @@ function handleAdminLogin() {
     } catch (Exception $e) {
         sendError('Login failed: ' . $e->getMessage(), 'INTERNAL_ERROR', 500);
     }
-}
-
-function checkLoginRateLimit($identifier, $maxAttempts = 5, $window = 900) {
-    $cacheDir = dirname(__DIR__, 3) . '/logs/rate_limits';
-    if (!is_dir($cacheDir)) {
-        mkdir($cacheDir, 0755, true);
-    }
-    
-    $cacheFile = $cacheDir . '/login_' . md5($identifier) . '.json';
-    
-    $attempts = [];
-    if (file_exists($cacheFile)) {
-        $content = file_get_contents($cacheFile);
-        $attempts = json_decode($content, true) ?: [];
-    }
-    
-    $now = time();
-    $attempts = array_filter($attempts, function($timestamp) use ($now, $window) {
-        return ($now - $timestamp) < $window;
-    });
-    
-    if (count($attempts) >= $maxAttempts) {
-        return false;
-    }
-    
-    $attempts[] = $now;
-    file_put_contents($cacheFile, json_encode($attempts));
-    
-    return true;
-}
-
-function logFailedLogin($ip, $username) {
-    $logDir = dirname(__DIR__, 3) . '/logs';
-    $logFile = $logDir . '/failed_logins.log';
-    
-    $logEntry = date('Y-m-d H:i:s') . " - IP: $ip - Username: $username\n";
-    error_log($logEntry, 3, $logFile);
 }
 
 /**
