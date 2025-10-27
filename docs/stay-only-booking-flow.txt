@@ -1,0 +1,661 @@
+🏠 STAY-ONLY BOOKING FLOW
+===========================================================
+Screen SB-1: Accommodation & Details
+
+┌────────────────────────────────────────────────────────────────────┐
+│  🏄 Mumbai Surf Club                                    [← Home]   │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Book Your Stay                                          🏠        │
+│                                                                    │
+│  Progress: ● ○ ○                                                  │
+│           Details  Confirmation  Payment                          │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Select Accommodation Type                                         │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐           │
+│  │  ⛺ TENT      │  │  🏠 DORM      │  │  🏡 COTTAGE   │           │
+│  │              │  │              │  │              │           │
+│  │  ₹1,000      │  │  ₹1,200      │  │  ₹6,000      │           │
+│  │  per person  │  │  per person  │  │  per cottage │           │
+│  │  per night   │  │  per night   │  │  per night   │           │
+│  │              │  │              │  │  (1-4 people)│           │
+│  │  Basic       │  │  AC + Fresh  │  │  Private +   │           │
+│  │  outdoor     │  │  bedding     │  │  Pet friendly│           │
+│  │              │  │              │  │              │           │
+│  │  [Select]    │  │  [Select]    │  │  [Select]    │           │
+│  └──────────────┘  └──────────────┘  └──────────────┘           │
+│                                                                    │
+│  Selected: Dorm ✓                                                 │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Check-in & Check-out Dates                                       │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  Check-in Date *                                                  │
+│  ┌────────────────────────────────────────────┐                  │
+│  │  📅  Oct 25, 2025 (Friday)            [▼]  │                  │
+│  └────────────────────────────────────────────┘                  │
+│                                                                    │
+│  Check-out Date *                                                 │
+│  ┌────────────────────────────────────────────┐                  │
+│  │  📅  Oct 27, 2025 (Sunday)            [▼]  │                  │
+│  └────────────────────────────────────────────┘                  │
+│                                                                    │
+│  📊 Total Nights: 2 nights                                        │
+│                                                                    │
+│  ⚠️ Bookings available for next 30 days from today                │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Number of Guests                                                 │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  ┌─────────────────────────────────────────┐                     │
+│  │    [−]     👥  2 guests      [+]        │                     │
+│  └─────────────────────────────────────────┘                     │
+│                                                                    │
+│  ℹ️ Dorm capacity: 40 beds total                                  │
+│  ℹ️ Cottage capacity: Max 4 people per cottage                    │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Meals                                                             │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  ☑ Include Meals (Breakfast + Dinner)                            │
+│  ℹ️ Adds ₹500 per person per night                                │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Customer Details                                                 │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  Full Name *                                                      │
+│  ┌──────────────────────────────────────────┐                    │
+│  │  John Doe                                │                    │
+│  └──────────────────────────────────────────┘                    │
+│                                                                    │
+│  Email Address *                                                  │
+│  ┌──────────────────────────────────────────┐                    │
+│  │  john.doe@example.com                    │                    │
+│  └──────────────────────────────────────────┘                    │
+│                                                                    │
+│  Phone Number *                                                   │
+│  ┌──────────────────────────────────────────┐                    │
+│  │  +91 9876543210                          │                    │
+│  └──────────────────────────────────────────┘                    │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Guest Details                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  👤 Guest 1 (Primary Booker)                                     │
+│  ┌─────────────────────────────────┐  ┌──────────────────┐      │
+│  │ Name: John Doe                  │  │ Age: [30]        │      │
+│  └─────────────────────────────────┘  └──────────────────┘      │
+│                                                                    │
+│  👥 Guest 2                                                       │
+│  ┌─────────────────────────────────┐  ┌──────────────────┐      │
+│  │ Name: Jane Doe                  │  │ Age: [28]        │      │
+│  └─────────────────────────────────┘  └──────────────────┘      │
+│                                                                    │
+│  ────────────────────────────────────────────────────────────── │
+│  Pricing Summary                                                  │
+│  ────────────────────────────────────────────────────────────── │
+│                                                                    │
+│  Accommodation:  2 guests × ₹1,200 × 2 nights    =  ₹4,800       │
+│  Meals:          2 guests × ₹500 × 2 nights      =  ₹2,000       │
+│                                               ─────────────       │
+│  Subtotal:                                        ₹6,800       │
+│  GST (18%):                                       ₹1,224       │
+│                                               ═════════════       │
+│  Total Amount:                                    ₹8,024       │
+│                                                                    │
+│                                  [Continue to Confirmation →]     │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Navigation:
+-----------------------------------------------------------
+- **[← Home]** → Homepage/Booking selection page
+- **"[Select]" (accommodation type)** → Updates pricing, stays on SB-1
+- **Check-in Date picker** → Opens calendar (30-day rolling window)
+- **Check-out Date picker** → Opens calendar (auto-validates minimum stay)
+- **[−] / [+] buttons** → Adjust guest count (1-40 max for tent/dorm, 1-4 for cottage)
+- **☑ Include Meals** → Toggles meal pricing, updates total
+- **Guest count change** → Dynamically adds/removes guest forms
+- **[Continue to Confirmation →]** → Validates all fields → Screen SB-2
+
+### Validation Rules:
+-----------------------------------------------------------
+**Accommodation Type:**
+- Must select one type before proceeding
+
+**Check-in Date:**
+- Must be within 30-day rolling window from today
+- Cannot be in the past
+- Must be before check-out date
+
+**Check-out Date:**
+- Must be after check-in date
+- Minimum stay: 1 night
+- Maximum stay: 30 nights (but can be less based on booking window)
+- Must be within booking window
+
+**Guest Count:**
+- Minimum: 1 guest
+- Maximum for Tent/Dorm: 40 guests
+- Maximum for Cottage: 4 guests (validation shows error if exceeded)
+- If cottage selected and >4 guests: Show error "Cottage accommodates maximum 4 people"
+
+**Customer Details:**
+- Name: Required, letters and spaces only, 2-100 characters
+- Email: Required, valid email format
+- Phone: Required, valid 10-digit Indian mobile (starts with 6-9)
+
+**Guest Details:**
+- Each guest needs name and age
+- Name: Required, letters and spaces only
+- Age: Required, 5-100 years
+- Primary booker (Guest 1) auto-fills from customer name
+
+### Special Cases:
+-----------------------------------------------------------
+**Extended Stay (6 Nights):**
+- Only available for Dorm
+- Automatically detected when nights = 6
+- Special pricing applied: ₹6,000/person (without meals) or ₹11,000/person (with meals)
+- Show info: "✨ Extended Stay Package Applied! Special rate for 6 nights."
+
+**Cottage Pricing:**
+- Flat rate per cottage per night: ₹6,000
+- Meals are optional add-on: ₹500 per person per night
+- Pricing display:
+```
+  Cottage (flat rate):            2 nights × ₹6,000  =  ₹12,000
+  Meals (optional):     2 guests × ₹500 × 2 nights   =  ₹2,000
+```
+
+**Capacity Warnings:**
+- If tent selection and 18/20 already booked: "⚠️ Limited availability - Only 2 spots left!"
+- If dorm 38/40 booked: "⚠️ Almost full - Only 2 beds remaining!"
+- If cottages 4/5 booked: "⚠️ Only 1 cottage available!"
+- If fully booked: Disable selection, show "SOLD OUT" badge
+
+### Error Messages:
+-----------------------------------------------------------
+- **No accommodation selected:** "Please select an accommodation type"
+- **Invalid date range:** "Check-out date must be after check-in date"
+- **Past date:** "Cannot book for past dates"
+- **Outside booking window:** "Date is outside the 30-day booking window"
+- **Invalid guest count:** "Number of guests must be between 1 and [max]"
+- **Cottage capacity exceeded:** "Cottages accommodate maximum 4 people. Please select Tent or Dorm for larger groups."
+- **Invalid customer name:** "Please enter a valid name (letters and spaces only)"
+- **Invalid email:** "Please enter a valid email address"
+- **Invalid phone:** "Please enter a valid 10-digit Indian mobile number"
+- **Missing guest details:** "Please fill in name and age for all guests"
+- **Invalid age:** "Age must be between 5 and 100"
+
+-----------------------------------------------------------
+
+## Screen SB-2: Confirmation & Payment
+-----------------------------------------------------------
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  🏄 Mumbai Surf Club                              [← Back to Edit] │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│  Confirm Your Stay                                      ✓          │
+│                                                                    │
+│  Progress: ● ● ○                                                  │
+│           Details  Confirmation  Payment                          │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  🏠 Accommodation Details                                          │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Type:              🏠 Hostel Dorm                       │    │
+│  │  Guests:            2 people                            │    │
+│  │  Check-in:          Friday, Oct 25, 2025                │    │
+│  │  Check-out:         Sunday, Oct 27, 2025                │    │
+│  │  Duration:          2 nights                            │    │
+│  │  Meals Included:    ✓ Yes (Breakfast + Dinner)          │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  👤 Customer Information                                           │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Name:              John Doe                             │    │
+│  │  Email:             john.doe@example.com                 │    │
+│  │  Phone:             +91 9876543210                       │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  👥 Guest List                                                     │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  1. John Doe (30 years) - Primary Booker                │    │
+│  │  2. Jane Doe (28 years)                                  │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  💰 Pricing Breakdown                                              │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │  Accommodation (Dorm)                                    │    │
+│  │  2 guests × ₹1,200 per night × 2 nights    =  ₹4,800    │    │
+│  │                                                          │    │
+│  │  Meals (Breakfast + Dinner)                              │    │
+│  │  2 guests × ₹500 per night × 2 nights      =  ₹2,000    │    │
+│  │  ─────────────────────────────────────────────────────  │    │
+│  │  Subtotal:                                    ₹6,800    │    │
+│  │                                                          │    │
+│  │  GST (18%):                                   ₹1,224    │    │
+│  │  ═════════════════════════════════════════════════════  │    │
+│  │  Total Amount:                                ₹8,024    │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  📝 What's Included                                                │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ✓ 2 nights accommodation in Hostel Dorm                          │
+│  ✓ Fresh bedding and pillow                                       │
+│  ✓ Air conditioning                                               │
+│  ✓ Common washroom facilities                                     │
+│  ✓ Breakfast (2 mornings)                                         │
+│  ✓ Dinner (2 evenings)                                            │
+│  ✓ Access to campus facilities                                    │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  📋 Important Information                                          │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ⏰ Check-in Time:    12:00 PM (noon)                             │
+│  ⏰ Check-out Time:   10:00 AM                                    │
+│  🍽️ Breakfast:        After morning activities                    │
+│  🍽️ Dinner:           8:00 PM                                     │
+│                                                                    │
+│  📜 Cancellation Policy:                                          │
+│  • Free cancellation up to 24 hours before check-in              │
+│  • 50% refund for cancellations within 24 hours                  │
+│  • No refund for no-shows                                         │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  ☑ Terms & Conditions                                             │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  ☐ I agree to the terms and conditions and cancellation policy   │
+│                                                                    │
+│                                                                    │
+│                        [Proceed to Payment →]                      │
+│                              (disabled)                            │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+### Navigation:
+-----------------------------------------------------------
+- **[← Back to Edit]** → Returns to Screen SB-1 with all data preserved
+- **☐ Terms checkbox** → Enables payment button when checked
+- **[Proceed to Payment →]** → Validates availability → Initiates payment flow
+
+### Pre-Payment Validation:
+-----------------------------------------------------------
+**Before proceeding to payment, system validates:**
+
+1. **Accommodation Availability:**
+   - Check if selected accommodation type still has capacity
+   - For Dorm: Verify available beds ≥ guest count
+   - For Tent: Verify available tents ≥ guest count
+   - For Cottage: Verify available cottages ≥ required cottages (ceil(guests/4))
+
+2. **Date Availability:**
+   - Verify dates are still within booking window
+   - Check for any date conflicts or blackout dates
+
+3. **Booking Window:**
+   - Confirm check-in date is still future date
+   - Confirm dates are within rolling 30-day window
+
+**If validation fails:**
+```
+┌─────────────────────────────────────────────┐
+│  ⚠️ Availability Changed                     │
+├─────────────────────────────────────────────┤
+│                                             │
+│  Sorry, availability has changed since     │
+│  you started your booking.                 │
+│                                             │
+│  • Dorm: Only 1 bed remaining              │
+│    (You need 2 beds)                       │
+│                                             │
+│  [Go Back and Modify]  [Try Again]         │
+│                                             │
+└─────────────────────────────────────────────┘
+Payment Processing:
+
+When user clicks "Proceed to Payment":
+
+API Call: POST /api/v1/bookings/stay
+
+json   {
+     "customer_name": "John Doe",
+     "customer_email": "john.doe@example.com",
+     "customer_phone": "9876543210",
+     "accommodation_type": "dorm",
+     "check_in_date": "2025-10-25",
+     "check_out_date": "2025-10-27",
+     "nights_count": 2,
+     "includes_meals": true,
+     "people": [
+       { "name": "John Doe", "age": 30 },
+       { "name": "Jane Doe", "age": 28 }
+     ]
+   }
+
+Response Handling:
+Success Response:
+
+json   {
+     "success": true,
+     "data": {
+       "id": 12366,
+       "booking_reference": "STAY-12366-20251020",
+       "booking_type": "stay_only",
+       "booking_status": "confirmed",
+       "payment_status": "pending",
+       "razorpay_order_id": "order_ABC123XYZ",
+       "total_amount": 8024,
+       "customer": {...},
+       "accommodation": {...}
+     }
+   }
+Error Response:
+json   {
+     "success": false,
+     "error": {
+       "code": "CAPACITY_ERROR",
+       "message": "Selected accommodation no longer available"
+     }
+   }
+```
+
+3. **Razorpay Integration:**
+   - Initialize Razorpay with order_id
+   - Open Razorpay payment modal
+   - Handle payment success/failure callbacks
+
+4. **Payment Success:**
+   - Update booking payment status to "completed"
+   - Redirect to success page: `booking-success.html?ref=STAY-12366-20251020`
+
+5. **Payment Failure:**
+   - Show error message
+   - Keep booking in "pending" status
+   - Offer retry option
+
+### Success Page (booking-success.html):
+-----------------------------------------------------------
+```
+┌────────────────────────────────────────────────────────────────────┐
+│  🏄 Mumbai Surf Club                                               │
+├────────────────────────────────────────────────────────────────────┤
+│                                                                    │
+│                      ✅ Booking Confirmed!                         │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│      Your stay has been successfully booked!                      │
+│                                                                    │
+│      Booking Reference: STAY-12366-20251020                       │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  📧 A confirmation email has been sent to:                        │
+│     john.doe@example.com                                          │
+│                                                                    │
+│  📱 You will receive a reminder SMS 1 day before check-in         │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  📋 Booking Summary                                               │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  Accommodation:  Hostel Dorm (2 guests)                           │
+│  Check-in:       Friday, Oct 25, 2025 @ 12:00 PM                 │
+│  Check-out:      Sunday, Oct 27, 2025 @ 10:00 AM                 │
+│  Duration:       2 nights                                         │
+│  Total Paid:     ₹8,024 (including GST)                           │
+│                                                                    │
+│  ══════════════════════════════════════════════════════════════ │
+│  📍 Location & Directions                                         │
+│  ══════════════════════════════════════════════════════════════ │
+│                                                                    │
+│  Mumbai Surf Club                                                 │
+│  Pali Beach, Satpati                                              │
+│  [Get Directions]                                                 │
+│                                                                    │
+│  Need Help? Contact us at +91 98765 43210                         │
+│                                                                    │
+│                    [Download Receipt]  [Back to Home]             │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+```
+
+-----------------------------------------------------------
+
+## SB Flow Summary & Navigation Map
+-----------------------------------------------------------
+```
+STAY-ONLY BOOKING FLOW COMPLETE NAVIGATION
+═══════════════════════════════════════════
+
+Start: Homepage/Booking Type Selection
+  │
+  ├─> "Book Stay" button
+  │
+  ▼
+┌─────────────────────────────────────────┐
+│ SB-1: Accommodation & Details           │
+│                                         │
+│ Actions:                                │
+│ • Select accommodation type             │
+│ • Choose check-in/out dates             │
+│ • Set number of guests                  │
+│ • Toggle meals option                   │
+│ • Fill customer details                 │
+│ • Fill guest details                    │
+│                                         │
+│ Validation:                             │
+│ • All required fields filled            │
+│ • Valid date range                      │
+│ • Within booking window                 │
+│ • Guest count within limits             │
+│ • Valid email/phone format              │
+└─────────────────────────────────────────┘
+  │
+  ├─> [Continue to Confirmation →]
+  │
+  ▼
+┌─────────────────────────────────────────┐
+│ SB-2: Confirmation & Payment            │
+│                                         │
+│ Display:                                │
+│ • Full booking summary                  │
+│ • Customer information                  │
+│ • Guest list                            │
+│ • Complete pricing breakdown            │
+│ • What's included                       │
+│ • Check-in/out times                    │
+│ • Cancellation policy                   │
+│                                         │
+│ Actions:                                │
+│ • Accept terms & conditions             │
+│ • Proceed to payment                    │
+│                                         │
+│ Validation:                             │
+│ • Pre-payment availability check        │
+│ • Accommodation capacity verification   │
+│ • Date validity confirmation            │
+└─────────────────────────────────────────┘
+  │
+  ├─> [← Back to Edit] → Returns to SB-1
+  │
+  ├─> [Proceed to Payment →]
+  │     │
+  │     ├─> API: POST /bookings/stay
+  │     │
+  │     ├─> Success → Razorpay Modal
+  │     │              │
+  │     │              ├─> Payment Success → Success Page
+  │     │              │
+  │     │              └─> Payment Failed → Error + Retry
+  │     │
+  │     └─> API Error → Show error message
+  │
+  ▼
+┌─────────────────────────────────────────┐
+│ Success Page                            │
+│                                         │
+│ Display:                                │
+│ • Booking confirmation                  │
+│ • Booking reference number              │
+│ • Email confirmation notice             │
+│ • Complete booking summary              │
+│ • Check-in instructions                 │
+│ • Location & directions                 │
+│                                         │
+│ Actions:                                │
+│ • Download receipt                      │
+│ • Get directions                        │
+│ • Back to home                          │
+└─────────────────────────────────────────┘
+```
+
+-----------------------------------------------------------
+
+## Error Handling & Edge Cases
+-----------------------------------------------------------
+
+### **Case 1: Accommodation Sold Out Mid-Booking**
+```
+User starts booking → Dorm has 2 beds available
+User fills form → Takes 5 minutes
+User clicks "Continue" → Another user booked those 2 beds
+Result: Show error on SB-2 before payment
+```
+
+**Solution:**
+- Validate availability on SB-1 → SB-2 transition
+- Show clear error message
+- Offer alternatives: "Try different accommodation or dates"
+
+### **Case 2: Extended Stay Detection**
+```
+User selects Dorm + 6 nights → Auto-apply extended stay package
+Pricing changes from:
+  6 × ₹1,200 = ₹7,200 (without meals)
+To:
+  Extended package = ₹6,000 (without meals)
+```
+
+**Solution:**
+- Automatically detect 6-night Dorm bookings
+- Apply special pricing
+- Show prominent notification: "✨ Extended Stay Package Applied!"
+
+### **Case 3: Cottage Capacity Exceeded**
+```
+User selects Cottage + 5 guests → Validation error
+```
+
+**Solution:**
+- Disable "Continue" button
+- Show error: "Cottages accommodate maximum 4 people"
+- Suggest: "Please select Tent or Dorm, or reduce guests to 4"
+
+### **Case 4: Date Outside Booking Window**
+```
+User manually enters date beyond 30 days
+```
+
+**Solution:**
+- Date picker restricts to valid dates only
+- If bypassed, show validation error
+- Message: "Bookings available for next 30 days only"
+
+### **Case 5: Payment Timeout**
+```
+User opens Razorpay → Gets distracted → Payment times out
+Solution:
+
+Booking remains in "pending" status
+Show timeout message with retry button
+Allow user to retry payment for same booking
+
+
+API Endpoints Required
+
+1. GET /utils/stay-info
+Purpose: Get accommodation types, pricing, capacity info
+Response:
+json{
+  "accommodation_types": {
+    "tent": { "name": "...", "capacity": 20, "pricing": {...} },
+    "dorm": { "name": "...", "capacity": 40, "pricing": {...} },
+    "cottage": { "name": "...", "capacity": 5, "pricing": {...} }
+  },
+  "booking_window": {...}
+}
+2. GET /utils/booking-window
+Purpose: Get available dates for stay bookings (30-day rolling)
+Response:
+json{
+  "type": "rolling_30_days",
+  "current_date": "2025-10-24",
+  "window_start": "2025-10-24",
+  "window_end": "2025-11-23",
+  "bookable_dates": [...]
+}
+3. POST /pricing/stay
+Purpose: Calculate pricing before final confirmation
+Payload:
+json{
+  "accommodation_type": "dorm",
+  "people_count": 2,
+  "nights_count": 2,
+  "includes_meals": true
+}
+Response:
+json{
+  "base_amount": 6800,
+  "gst_amount": 1224,
+  "total_amount": 8024,
+  "breakdown": {...}
+}
+4. POST /bookings/stay
+Purpose: Create stay-only booking
+Payload: (See payment processing section above)
+Response: Booking object with Razorpay order_id
+5. POST /utils/validate-booking
+Purpose: Validate booking data before payment (optional)
+Payload:
+json{
+  "booking_type": "stay",
+  "accommodation_type": "dorm",
+  "check_in_date": "2025-10-25",
+  "check_out_date": "2025-10-27",
+  "people_count": 2
+}
+Response:
+json{
+  "is_valid": true,
+  "errors": [],
+  "warnings": ["Only 3 beds remaining"]
+}

@@ -1,0 +1,69 @@
+### **ACTIVITY BOOKING FLOW**
+```
+Screen AB-1: People & Customer Details
+├─ Number of people selector
+├─ Customer form (name, email, phone)
+├─ Per-person forms with ACTIVITY DROPDOWN
+└─ Activity summary (validates capacity)
+
+Screen AB-2: Date & Slot Selection  
+├─ Calendar (weekly booking window)
+├─ Slots GROUPED BY ACTIVITY (different times!)
+├─ Multi-slot selection (one slot per activity)
+└─ Availability validation
+
+Screen AB-3: Confirmation & Payment
+├─ Detailed summary BY ACTIVITY
+├─ Who's doing what at what time
+├─ Pricing breakdown
+└─ Payment processing
+```
+
+### **PACKAGE BOOKING FLOW**
+```
+Screen PB-1: Package Selection
+├─ Package type cards (1N1S, 1N2S, 2N3S)
+├─ Accommodation selection
+├─ Number of people
+├─ Customer details
+├─ Per-person forms with ACTIVITY DROPDOWN
+└─ Activity summary
+
+Screen PB-2: Check-in & Sessions
+├─ Calendar for check-in date
+├─ Auto-calculated checkout
+├─ For EACH session:
+│   ├─ Show default activities per person
+│   ├─ Allow customization (switch activities)
+│   ├─ Select slot per activity
+│   └─ Validate capacity per activity
+└─ Session summary
+
+Screen PB-3: Confirmation & Payment
+├─ Package overview
+├─ Stay dates
+├─ Per-session breakdown showing:
+│   ├─ Which people do which activity
+│   ├─ At which time slots
+│   └─ For each session day
+├─ Pricing with accommodation
+└─ Payment processing
+```
+
+### **STAY-ONLY BOOKING FLOW**
+```
+Screen SB-1: Accommodation & Dates
+├─ Accommodation type selection
+├─ Check-in/out date picker
+├─ Nights calculation
+├─ Meals option
+├─ Number of people
+├─ Customer details
+└─ Guest details
+
+Screen SB-2: Confirmation & Payment
+├─ Stay summary
+├─ Accommodation details
+├─ Pricing breakdown
+└─ Payment processing
+```

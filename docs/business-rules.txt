@@ -1,0 +1,427 @@
+===========================================================
+🎯 COMPLETE BUSINESS RULES — MUMBAI SURF CLUB
+===========================================================
+
+
+📅 1. BOOKING WINDOWS
+-----------------------------------------------------------
+
+Rule 1.1: Activity & Package Booking Window
+- Window Type: Weekly (Tuesday to Monday)
+- Duration: 7 days
+- Example: If today is Thursday Oct 24, customers can book from Tuesday Oct 22 to Monday Oct 28
+- Auto-renewal: Every Tuesday, the window shifts to the next Monday
+- Applies to: Activity bookings AND Package bookings
+
+Rule 1.2: Stay-Only Booking Window
+- Window Type: Rolling 30 days
+- Duration: 30 days from current date
+- Example: If today is Oct 24, customers can book from Oct 24 to Nov 23
+- Auto-renewal: Daily - always 30 days ahead from today
+- Applies to: Stay-only bookings ONLY
+
+Rule 1.3: Booking Window Enforcement
+- Backend MUST validate all bookings against these windows
+- Frontend MUST only show dates within the applicable window
+- Admin can see beyond the window but customers cannot book beyond it
+
+
+🏄 2. ACTIVITY SLOT RULES
+-----------------------------------------------------------
+
+Rule 2.1: Activity Slots Are Independent
+- Each activity (Surf, SUP) has its own separate slots.
+- Slots for different activities CAN overlap.
+  e.g. Surf 7:30–9:00 and SUP 8:30–10:00 → ✅ ALLOWED.
+
+Rule 2.2: Slot Capacity Per Activity
+- Default capacities:
+  Surf: 40  |  SUP: 12  |  Kayak: 2
+- Admin can override per slot.
+
+Rule 2.3: Slot Capacity Is Shared
+- Shared between Activity bookings and Package bookings.
+  Example:
+    Total 40 → 20 (Activity) + 15 (Package) = 5 left.
+
+Rule 2.4: Slot Cannot Be Deleted If Booked
+- 0 bookings → Can delete freely.
+- Has bookings → Must cancel first with reason + refund.
+
+Rule 2.5: Slot Capacity(spots) can be increased but Slot Capacity Cannot Be Reduced Below Booked Count
+- Current 40, Booked 35 → Minimum = 35, Cannot set < 35.
+
+Rule 2.6: Slot Time Validation
+- Same activity cannot overlap on same day.
+- Different activities CAN overlap.
+
+
+🎯 3. ACTIVITY BOOKING RULES
+-----------------------------------------------------------
+
+Rule 3.1: Multi-Activity Booking Support
+- One booking can include different activities based on peoples choice,
+ some will choose surf, some will choose sup.
+
+Rule 3.2: Activity Booking Slot Selection
+- Must select valid slot(s) per activity on SAME date.
+
+Rule 3.3: Capacity Validation Per Activity
+- Validate capacity for each activity independently.
+
+Rule 3.4: Activity Booking Date Restriction
+- Must fall within weekly booking window (Tue–Mon).
+
+Rule 3.5: Maximum People Per Activity Booking
+- Max 40 people per booking overall.
+- Still respect each activity’s slot limit.
+
+
+📦 4. PACKAGE BOOKING RULES
+-----------------------------------------------------------
+
+Rule 4.1: Package Types
+- 1N1S → 1 Night / 1 Session (session on check-in day, morning)
+- 1N2S → 1 Night / 2 Sessions (check-in Day1 + check-out Day2,all morning)
+- 2N3S → 2 Nights / 3 Sessions (check-in Day1 + Day2 + check-out Day3, all morning)
+
+Rule 4.2: Package Booking Window
+- Check-in date must be within Tue–Mon booking window.
+
+Rule 4.3: Per-Person Per-Session Activity Selection
+- Each person can switch activity between sessions. (customize option will be provided in frontend)
+
+Rule 4.4: Package Activities Supported
+- Packages: Surf + SUP only. (if we add more activity they will also come,
+ like kayak with it's own slots, capacities and validations)
+
+Rule 4.5: Package Session Slot Selection
+- Each session may have different Surf/SUP slots.
+
+Rule 4.6: Package Capacity Validation
+- Each session validates capacity for Surf & SUP and other activities separately.
+
+Rule 4.7: Package Session Date Sequence Validation
+- Validate correct date sequence (no skip or same-day sessions).
+
+Rule 4.8: Package Accommodation Validation
+- Shares capacity with Stay-only bookings.
+
+
+🏠 5. ACCOMMODATION CAPACITY RULES
+-----------------------------------------------------------
+
+Rule 5.1: Accommodation Types & Capacity
+- Tents: 20 × 1 person
+- Dorm: 40 × 1 person
+- Cottages: 5 × up to 4 people (20 total)
+
+Rule 5.2: Shared Accommodation Capacity
+- Shared between Package & Stay-only bookings.
+
+Rule 5.3: Cottage Pricing Logic
+- for package booking
+- //--- Package Prices ---
+// Required because package pricing logic is complex (tiered by cottage occupancy)
+// and not directly stored in the database structure.
+('PACKAGE_PRICES', [
+    '1_night_1_session' => [        // Corresponds to DB code '1N1S'
+        'tent' => 3000,             // Per person
+        'dorm' => 3250,             // Per person
+        'cottage_1' => 9000,        // Cottage price if 1 person books it
+        'cottage_2' => 10500,       // Cottage price if 2 people book it
+        'cottage_3' => 12750,       // Cottage price if 3 people book it
+        'cottage_4' => 15000        // Cottage price if 4 people book it
+    ],
+    '1_night_2_sessions' => [       // Corresponds to DB code '1N2S'
+        'tent' => 5000,             // Per person
+        'dorm' => 5000,             // Per person
+        'cottage_1' => 10000,       // Cottage price if 1 person books it
+        'cottage_2' => 14000,       // Cottage price if 2 person books it
+        'cottage_3' => 18000,       // Cottage price if 3 person books it
+        'cottage_4' => 22000        // Cottage price if 4 person books it
+    ],
+    '2_nights_3_sessions' => [      // Corresponds to DB code '2N3S'
+        'tent' => 8000,             // Per person
+        'dorm' => 8000,             // Per person
+        'cottage_1' => 18000,       // Cottage price if 1 person books it
+        'cottage_2' => 24000,       // Cottage price if 2 person books it
+        'cottage_3' => 30000,       // Cottage price if 3 person books it
+        'cottage_4' => 36000        // Cottage price if 4 person books it
+    ]
+]);
+
+- for simple stay-only booking
+we'll use data from our database here's the sample insertions
+INSERT INTO accommodation_types (name, code, total_capacity, capacity_unit, max_people_per_unit, base_price_per_unit, meal_price_per_person, description) VALUES
+('Tent', 'tent', 20, 'person', 1, 1000, 500, 'Basic outdoor camping'),
+('Dorm', 'dorm', 40, 'bed', 1, 1200, 500, 'Shared AC room with fresh bedding'),
+('Cottage', 'cottage', 5, 'cottage', 4, 6000, 500, 'Private cottage for groups (1-4 people)');
+
+
+Rule 5.4: Tent & Dorm Pricing Logic
+- fixed per person pricing
+- it's package booking, we'll calculate from the array provided above
+- for stay only booking, we'll calculate from database.
+
+Rule 5.5: Accommodation Capacity Cannot Be Reduced Below Booked
+- Validate against next 30 days of bookings.
+
+
+🏖️ 6. STAY-ONLY BOOKING RULES
+-----------------------------------------------------------
+
+Rule 6.1: Stay-Only Booking Window
+- Must be within rolling 30-day window.
+
+Rule 6.2: Stay-Only Accommodation
+- Uses shared capacity (Tent, Dorm, Cottage).
+
+Rule 6.3: Nights Calculation
+- Nights = (Checkout – Checkin); must be ≥ 1.
+
+Rule 6.4: Extended Stay Package
+- 6-night Dorm stays get special pricing & meals.
+('EXTENDED_ADVENTURE', [
+    'dorm' => [
+        'without_meals' => 6000,    // Price per person for 6 nights, no meals
+        'with_meals' => 11000       // Price per person for 6 nights + all meals
+    ]
+]);
+
+Rule 6.5: Meal Options
+- Meals optional for Tent/Dorm; extra per-person for Cottage.
+
+
+💰 7. PRICING RULES
+-----------------------------------------------------------
+
+- activity booking pricing per person calculated from data-base (below is the sample data insertions)
+INSERT INTO activities (name, code, description, icon_emoji, default_capacity, price_per_person, duration_minutes) VALUES
+('Surfing', 'surf', 'Learn to surf with professional instructors', '🏄', 40, 1700, 90),
+('Stand Up Paddle', 'sup', 'Stand Up Paddleboarding experience', '🏄‍♂️', 12, 1700, 90);
+
+// --- Default GST Rate ---
+('DEFAULT_GST_RATE', 0.18); // 18%
+
+- package booking pricing per person calculated from data-base 
+// Required because package pricing logic is complex (tiered by cottage occupancy)
+// and not directly stored in the database structure.
+('PACKAGE_PRICES', [
+    '1_night_1_session' => [        // Corresponds to DB code '1N1S'
+        'tent' => 3000,             // Per person
+        'dorm' => 3250,             // Per person
+        'cottage_1' => 9000,        // Cottage price if 1 person books it
+        'cottage_2' => 10500,       // Cottage price if 2 people book it
+        'cottage_3' => 12750,       // Cottage price if 3 people book it
+        'cottage_4' => 15000        // Cottage price if 4 people book it
+    ],
+    '1_night_2_sessions' => [       // Corresponds to DB code '1N2S'
+        'tent' => 5000,             // Per person
+        'dorm' => 5000,             // Per person
+        'cottage_1' => 10000,       // Cottage price if 1 person books it
+        'cottage_2' => 14000,       // Cottage price if 2 person books it
+        'cottage_3' => 18000,       // Cottage price if 3 person books it
+        'cottage_4' => 22000        // Cottage price if 4 person books it
+    ],
+    '2_nights_3_sessions' => [      // Corresponds to DB code '2N3S'
+        'tent' => 8000,             // Per person
+        'dorm' => 8000,             // Per person
+        'cottage_1' => 18000,       // Cottage price if 1 person books it
+        'cottage_2' => 24000,       // Cottage price if 2 person books it
+        'cottage_3' => 30000,       // Cottage price if 3 person books it
+        'cottage_4' => 36000        // Cottage price if 4 person books it
+    ]
+]);
+
+- stay-only booking pricing per person calculated from data-base (below is the sample data insertions)
+we'll use data from our database here's the sample insertions
+INSERT INTO accommodation_types (name, code, total_capacity, capacity_unit, max_people_per_unit, base_price_per_unit, meal_price_per_person, description) VALUES
+('Tent', 'tent', 20, 'person', 1, 1000, 500, 'Basic outdoor camping'),
+('Dorm', 'dorm', 40, 'bed', 1, 1200, 500, 'Shared AC room with fresh bedding'),
+('Cottage', 'cottage', 5, 'cottage', 4, 6000, 500, 'Private cottage for groups (1-4 people)');
+
+// --- Extended Adventure (stay-only) (Special 6 Nights / 7 Days Package for Dorm) ---
+define('EXTENDED_ADVENTURE', [
+    'dorm' => [
+        'without_meals' => 6000,    // Price per person for 6 nights, no meals
+        'with_meals' => 11000       // Price per person for 6 nights + all meals
+    ]
+]);
+
+
+🔒 8. CAPACITY RESERVATION RULES
+-----------------------------------------------------------
+
+Rule 8.1: Activity Slot Reservation
+- Reduces slot availability immediately on booking.
+
+Rule 8.2: Package Session Reservation
+- Reduces capacity per session per activity.
+
+Rule 8.3: Accommodation Reservation
+- Reserves tents/beds/cottages per night.
+
+Rule 8.4: Capacity Release on Cancellation
+- Frees up slot & accommodation instantly.
+
+
+❌ 9. CANCELLATION RULES
+-----------------------------------------------------------
+
+Rule 9.1: Requirements
+- Reason required, email sent, refund processed.
+
+Rule 9.2: Activity Booking
+- Release slot capacity accordingly.
+
+Rule 9.3: Package Booking
+- Release all sessions, all slots/spots + accommodation.
+
+Rule 9.4: Stay-Only Booking
+- Release all nights.
+
+Rule 9.5: Slot Deletion with Bookings
+- Cancel all bookings first → then delete slot.
+
+
+✅ 10. VALIDATION RULES
+-----------------------------------------------------------
+
+Rule 10.1: Activity Booking Validation (Backend)
+  1. Check booking window (Tue–Mon)
+  2. Not past date or past slots for same day.
+  3. Validate slot existence & capacity per activity
+  4. Validate counts, customer & participant info
+
+Rule 10.2: Package Booking Validation (Backend)
+  1. Check window, date, and package type
+  2. Validate sessions’ order & slot capacities
+  3. Validate accommodation availability
+  4. Validate people/session mappings
+
+Rule 10.3: Stay-Only Booking Validation (Backend)
+  1. Check rolling 30-day window
+  2. Check valid date range
+  3. Validate accommodation per night
+  4. Validate max people (≤4 per cottage)
+
+Rule 10.4: Slot Creation Validation (Admin)
+  - Time format valid, no overlap, capacity ≤ 100.
+
+Rule 10.5: Capacity Update Validation (Admin)
+  - New ≥ booked count, ≥ 0, ≤ 100 for slots.
+  - For accommodation, check booked nights ≤ new total.
+
+
+🔄 11. WEEKLY BOOKING WINDOW ROTATION
+-----------------------------------------------------------
+
+Rule 11.1: Automatic Window Shift
+- Every Tuesday 12:00 AM → new Tue–Mon window starts.
+
+Rule 11.2: Admin Slot Management Ahead of Time
+- Admin should pre-create slots for next week. 
+else default slots get applied. 
+
+Rule 11.3: Stay-Only Window Rolling
+- Always 30 days forward, updated daily.
+
+
+🎯 12. CHECK-IN RULES (Package Bookings)
+-----------------------------------------------------------
+
+Rule 12.1: Session Check-In Tracking
+- Per-session check-in toggle, independent of payment.
+
+Rule 12.2: Check-In Timing
+- Can mark before/during/after session.
+
+Rule 12.3: Check-In Purpose
+- Attendance confirmation; no effect on capacity.
+
+
+📧 13. NOTIFICATION RULES
+-----------------------------------------------------------
+
+Rule 13.1: Booking Confirmation Email
+- Sent immediately after success; includes details.
+
+Rule 13.2: Reminder Email
+- 1 day before session; can be triggered manually.
+
+Rule 13.3: Cancellation Email
+- Sent instantly; includes refund info.
+
+Rule 13.4: Slot Deletion Notification
+- Sent to all affected customers with reason & refund info.
+
+
+🔐 14. ADMIN PERMISSION RULES
+-----------------------------------------------------------
+
+Rule 14.1: Authentication
+- Login required; session expires after 24 hrs.
+- “Remember me” = 7 days persistence.
+
+Rule 14.2: Destructive Action Confirmation
+- Required for delete/cancel actions with reason.
+
+
+🎲 15. EDGE CASES & CONFLICT RESOLUTION
+-----------------------------------------------------------
+
+Rule 15.1: Concurrent Booking Conflict
+- First payment wins; second rejected.
+
+Rule 15.2: Capacity Change During Booking
+- Validate capacity again before payment confirm.
+
+Rule 15.3: Slot Deletion During Booking
+- Booking fails; slot no longer available.
+
+Rule 15.4: Accommodation Full Mid-Booking
+- Validate availability again before payment confirm.
+
+Rule 15.5: Overbooking Prevention
+- Triple validation: selection → submit → payment.
+
+
+📋 16. DATA INTEGRITY RULES
+-----------------------------------------------------------
+
+Rule 16.1: Booking Status States
+- Pending / Confirmed / Cancelled / Completed.
+
+Rule 16.2: Payment Status States
+- Pending / Paid / Failed / Refunded.
+
+Rule 16.3: Cascade Delete Rules
+- Delete allowed only when no active/future data depends.
+
+Rule 16.4: Referential Integrity
+- All foreign keys valid (booking → slot → customer).
+
+Rule 16.4: Atomicity Integrity
+- Transaction will 100% success or 100% fail, no partial data will enter database.
+
+
+🎯 SUMMARY: Critical Rules to Remember
+-----------------------------------------------------------
+Top 10 Key Points:
+
+1. Activity/Package = Weekly window (Tue–Mon)
+2. Stay = Rolling 30-day window
+3. Slot capacity shared across bookings
+4. Accommodation capacity shared across booking types
+5. Activities have independent slots
+6. Multi-activity and per-session flexibility allowed
+7. Validate each activity’s capacity separately
+8. Cannot reduce capacity below booked
+9. Must cancel before delete (slots)
+10. Validate again at final payment
+
+-----------------------------------------------------------
+
+🏁 END OF BUSINESS RULES — MUMBAI SURF CLUB
+===========================================================
